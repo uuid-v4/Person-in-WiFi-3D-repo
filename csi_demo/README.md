@@ -45,6 +45,31 @@ configs/wifi/petr_wifi_esp_multitx_2d.py   training config for the 9-link datase
 Changes to the paper's code (`opera/`, `third_party/mmdet`): 2D keypoint mode (`coord_dim`), configurable
 CSI token width (`csi_in_channels`), cached dataset loader, `pck2d` metric, faster keypoint match cost.
 
+## What is and is not reproducible
+
+- **Reproducible from this repo:** the whole pipeline — firmware, driver patches, transmitter/forwarder
+  services, live hub + recorder, dataset builder, training config, evaluation — on equivalent hardware.
+- **Not bit-exact:** the reported numbers come from our own recordings (one person, one room, 30 min),
+  which are not published (they include video of the subject). With your own hardware you get your own
+  dataset; expect the same *test* (real CSI beats mean-pose and shuffled-CSI baselines on a held-out
+  session), not the same digits. Wi-Fi CSI depends on the room, device placement and the person.
+- **Training randomness:** train with `--seed 0 --deterministic` for repeatable runs on one machine.
+- **Tested versions:** Mac Python 3.12.12 (`requirements.txt`, pinned); ESP-IDF v5.5.1 (components pinned
+  in `esp_ble_rx/dependencies.lock`); Raspberry Pi OS 13 (trixie), kernel 6.18.50+rpt-rpi-2712; training
+  Python 3.8.20, PyTorch 1.13.1+cu117, MMCV 1.5.3 (built with CUDA ops), MMDetection 2.25.0 (vendored),
+  NumPy 1.23.5, on an NVIDIA A100.
+- **Setup-specific values you must change:**
+
+  | What | Where |
+  |---|---|
+  | Transmitter dongle MACs | `pi/csi-tx.conf` |
+  | Mac IP the receiver Pi forwards to | `pi/csi-forward.service` (`--hub`) |
+  | Receiver board names by USB serial | `live/forwarder.py --name MAC=NAME` (or rename boards over BLE) |
+  | Transmitter Pi IPs for the status panel | `live/hub.py --pi LABEL=IP` |
+  | Webcam index | `live/hub.py --camera N` |
+  | Board names / order in the dataset | `dataset/build_2d_cache.py --boards ...` |
+  | Layout description saved per session | `LAYOUT` in `live/hub.py` |
+
 ## Reproduce
 
 Not in git (regenerated or downloaded): `data/` (recordings, caches), `work_dirs/`, ESP-IDF `build/`,
@@ -90,7 +115,7 @@ csi_demo/.venv/bin/python csi_demo/dataset/build_2d_cache.py --boards CSI-298988
   --session data/sessions/s2/csi:data/sessions/s2/labels --session data/sessions/s3/csi:data/sessions/s3/labels \
   --out data/cache_9link --split-by-session s3
 # GPU machine with this repo's MMCV/MMDet environment (see docs/get_started.md):
-PYTHONPATH=. python tools/train.py configs/wifi/petr_wifi_esp_multitx_2d.py
+PYTHONPATH=. python tools/train.py configs/wifi/petr_wifi_esp_multitx_2d.py --seed 0 --deterministic
 PYTHONPATH=. python csi_demo/train/eval_room1.py configs/wifi/petr_wifi_esp_multitx_2d.py \
   work_dirs/petr_wifi_esp_multitx_2d/epoch_10.pth --cache data/cache_9link
 ```

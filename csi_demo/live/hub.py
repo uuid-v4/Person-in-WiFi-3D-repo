@@ -332,7 +332,12 @@ def main():
     ap.add_argument('--port', type=int, default=8766)
     ap.add_argument('--udp', type=int, default=5599)
     ap.add_argument('--camera', type=int, default=1)
+    ap.add_argument('--pi', action='append', metavar='LABEL=IP',
+                    help='transmitter Pi to show status for (repeatable); default: this setup\'s two Pis')
     args = ap.parse_args()
+    if args.pi:
+        PIS.clear()
+        PIS.update(p.split('=', 1) for p in args.pi)
     for target, a in ((serial_watch, ()), (udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ()),
                       (camera_loop, (args.camera,))):
         threading.Thread(target=target, args=a, daemon=True).start()

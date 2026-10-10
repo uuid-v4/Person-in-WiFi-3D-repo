@@ -1,8 +1,8 @@
-# Mac / host side (live hub, recorder, dataset builder, BLE fallback)
-numpy
-pyserial
-bleak
-opencv-python
-mediapipe
-PyWavelets
-pillow
+# Mac / host side (live hub, recorder, dataset builder, BLE fallback); tested with Python 3.12.12
+numpy==2.5.3
+pyserial==3.5
+bleak==3.0.2
+opencv-python==5.0.0.93
+mediapipe==1.1.0
+PyWavelets==1.10.0
+pillow==12.3.0

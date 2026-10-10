@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run on a Pi with ESP32 receivers on USB: forward their live CSI records to the Mac hub over UDP.
 
-    python3 forwarder.py --hub 192.168.0.183 [--port 5599]
+    python3 forwarder.py --hub <MAC_IP> [--port 5599] [--name 30:ED:A0:A8:4E:E0=CSI-wroom1 ...]
 
 Boards are found by USB serial number (= Wi-Fi MAC). Datagram: board name (16 bytes, NUL padded)
 + float64 Pi receive time + one 118-byte record.
@@ -53,7 +53,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--hub', required=True)
     ap.add_argument('--port', type=int, default=5599)
+    ap.add_argument('--name', action='append', default=[], metavar='MAC=NAME',
+                    help='board name for a USB serial number (repeatable); unknown boards become CSI-<last 6 hex>')
     args = ap.parse_args()
+    NAMES.update(n.upper().split('=', 1) for n in args.name)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     stats = {}
     for path in sorted(glob.glob('/dev/serial/by-id/usb-Espressif_*')):
