@@ -248,11 +248,19 @@ PYTHONPATH=. python csi_demo/infer/predict.py configs/wifi/petr_wifi_esp_multitx
 # dashboard machine (has the session video): overlay prediction (red) vs camera label (green)
 csi_demo/.venv/bin/python csi_demo/infer/render_gif.py preds.npz --cache data/cache_9link --split test --out clip.gif
 ```
-**Live input for real-time inference:** while `hub.py` runs (add `--camera -1` to skip the webcam),
-`GET http://localhost:8766/live/window?mode=v1` returns the newest model-ready window built from the last
-20 packets of every link, preprocessed exactly like `build_2d_cache.py` (`mode=v2` adds sanitized phase
-and per-packet normalisation, 60 values per packet; `&format=npy` returns a raw `.npy` instead of JSON).
-It answers 503 until every link has 20 packets within the last 0.7 s. Feed it to the model at 2-5 Hz
-(one window = `simple_test` input with a batch axis added) to get live poses. The window code is
-`csi_demo/live/windowing.py`; replaying recorded sessions through it reproduces the training cache
-exactly.
+**Real-time pose from CSI only:**
+```bash
+# 1. export the trained model to ONNX (Python 3.8 env with torch 1.13.1 + mmcv 1.5.3, no CUDA needed)
+python csi_demo/infer/export_onnx.py configs/wifi/petr_wifi_esp_multitx_2d_v2.py data/ckpt/petr_9link_2d_v2_epoch25.pth \
+  data/ckpt/sample_s3_windows_v2.npz data/ckpt/petr_v2.onnx      # sample npz with key 'csi' for the parity check
+# 2. optional ClikaRT runtime: pip install clika_runtime-<ver>-cp312-...whl into csi_demo/.venv,
+#    credential file path via --license (default ./Default_Project_Wifi_Sensing.txt, git-ignored)
+# 3. run the hub: live CSI -> window every 0.25 s -> model -> skeleton on http://localhost:8766/live
+csi_demo/.venv/bin/python csi_demo/live/hub.py --camera -1 --backend clikart --model data/ckpt/petr_v2.onnx --mode v2
+```
+The red "Wi-Fi pose - CSI only" panel shows the top-1 pose (exponentially smoothed, `--smooth 0.5`), backend,
+latency and rate; the camera (if enabled with `--camera N`) is only drawn as a faint green reference.
+`--backend clikart` falls back to onnxruntime if ClikaRT cannot start (error shown on the page). Measured on
+an M3 MacBook: ~45-60 ms per window, ~4 Hz; ClikaRT and onnxruntime give the same top-1 pose on held-out windows.
+The window source is `GET /live/window?mode=v1|v2[&format=npy]` (503 until every link has 20 packets in the last
+0.7 s); `csi_demo/live/windowing.py` reproduces the training cache exactly on recorded sessions.

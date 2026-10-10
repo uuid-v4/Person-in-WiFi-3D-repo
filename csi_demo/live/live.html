@@ -14,7 +14,9 @@ button{border:0;padding:6px 14px;border-radius:4px;cursor:pointer;color:#fff}
 input{background:#222;color:#ddd;border:1px solid #444;padding:4px;width:70px}
 </style></head><body>
 <div class="top">
- <div class="card"><div class=lbl>Camera + 2D pose (MediaPipe) <span id=camfps></span></div>
+ <div class="card"><div class=lbl><b style="color:#f66">Wi-Fi pose &mdash; CSI only</b> <span id=wifistat></span></div>
+  <canvas id=wp width=360 height=360></canvas></div>
+ <div class="card"><div class=lbl>Camera + 2D pose (MediaPipe, reference only) <span id=camfps></span></div>
   <div id="vid"><img src="/live/video" width=480 height=360><canvas id=ov width=480 height=360></canvas></div></div>
  <div class="card"><div class=lbl>3D pose (metres, hip-centred, rotating)</div><canvas id=p3 width=300 height=300></canvas></div>
  <div class="card" style="min-width:300px"><div class=lbl><b>Session</b></div>
@@ -56,5 +58,13 @@ function pose(){if(!S)return;const c=S.cam||{};document.getElementById('camfps')
  const r=S.rec,el=document.getElementById('rec');
  el.innerHTML=(r?`<span class=dead>&#9679; REC</span> <b>${r.name}</b> ${r.elapsed}s elapsed, ${r.left}s left<br>frames ${r.frames} (person ${r.posed})<br>`+
   Object.entries(r.counts).sort().map(([k,v])=>`${k}: ${v}`).join('<br>'):'not recording')+`<br><span style="color:#888">${S.last||''}</span>`;}
-setInterval(poll,250);setInterval(draw,250);setInterval(pose,66);poll();
+function wifi(){if(!S)return;const w=S.wifi||{};const st=document.getElementById('wifistat');
+ st.innerHTML=w.status==='live'?`${w.backend} &middot; ${w.latency_ms} ms &middot; ${w.hz} Hz &middot; score ${w.score}`:`<span class=dead>${w.status||'off'}</span>${w.error?' ('+w.error+')':''}`;
+ const g=wp.getContext('2d');g.fillStyle='#151515';g.fillRect(0,0,360,360);g.strokeStyle='#333';g.strokeRect(0.5,0.5,359,359);
+ if(!w.kpts)return;const k=w.kpts;g.strokeStyle='#f55';g.lineWidth=4;
+ for(const[a,b]of E){g.beginPath();g.moveTo(k[a][0]*360,k[a][1]*360);g.lineTo(k[b][0]*360,k[b][1]*360);g.stroke();}
+ g.fillStyle='#fff';for(const p of k){g.beginPath();g.arc(p[0]*360,p[1]*360,4,0,7);g.fill();}
+ if(S.cam&&S.cam.kp2d){const c=S.cam.kp2d;g.globalAlpha=0.35;g.strokeStyle='#0f8';g.lineWidth=2;
+  for(const[a,b]of E){g.beginPath();g.moveTo(c[a][0]*360,c[a][1]*360);g.lineTo(c[b][0]*360,c[b][1]*360);g.stroke();}g.globalAlpha=1;}}
+setInterval(poll,250);setInterval(draw,250);setInterval(pose,66);setInterval(wifi,100);poll();
 </script></body></html>

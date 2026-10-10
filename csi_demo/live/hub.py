@@ -278,11 +278,44 @@ def snapshot(rows=80):
     if REC['active']:
         rec = dict(name=REC['name'], elapsed=round(now - REC['start']), left=round(REC['end'] - now),
                    frames=len(REC['t']), posed=int(sum(REC['n'])), counts=REC['counts'])
-    return dict(now=now, links=links, pis=PI_STATUS, rec=rec, last=REC.get('last'),
+    return dict(now=now, links=links, pis=PI_STATUS, rec=rec, last=REC.get('last'), wifi=WIFI,
                 cam={k: v for k, v in CAM.items() if k != 'jpeg'})
 
 
 WINDOW_CFG = {'boards': ['CSI-298988', 'CSI-wroom1', 'CSI-wroom2'], 'tx_ids': [1, 2, 3]}
+WIFI = {'status': 'off'}
+
+
+def infer_loop(args):
+    sys.path.insert(0, str(HERE.parent / 'infer'))
+    from runtime import PoseRuntime
+    rt = None
+    for backend in ([args.backend, 'onnxruntime'] if args.backend == 'clikart' else [args.backend]):
+        try:
+            rt = PoseRuntime(args.model, backend, args.license)
+            WIFI.update(backend=backend, status='waiting for CSI')
+            break
+        except Exception as exc:
+            WIFI['error'] = f'{backend}: {exc}'[:300]
+            print(f'inference backend {backend} failed: {exc}', flush=True)
+    if rt is None:
+        WIFI['status'] = 'no inference backend'
+        return
+    smooth = None
+    period = 1.0 / args.infer_hz
+    while True:
+        t0 = time.time()
+        t, w = live_window(args.mode)
+        if w is None:
+            WIFI.update(status='waiting for CSI (every link needs 20 recent packets)', kpts=None)
+            smooth = None
+        else:
+            score, kp = rt.predict(w)
+            smooth = kp if smooth is None else args.smooth * smooth + (1 - args.smooth) * kp
+            WIFI.update(status='live', kpts=np.round(smooth, 4).tolist(), raw=np.round(kp, 4).tolist(),
+                        score=round(score, 3), t=t, latency_ms=round(1000 * (time.time() - t0), 1),
+                        hz=round(1.0 / max(time.time() - WIFI.get('last', t0 - period), 1e-3), 1), last=time.time())
+        time.sleep(max(0.0, period - (time.time() - t0)))
 
 
 def live_window(mode):
@@ -369,6 +402,14 @@ def main():
     ap.add_argument('--port', type=int, default=8766)
     ap.add_argument('--udp', type=int, default=5599)
     ap.add_argument('--camera', type=int, default=1, help='webcam index; -1 = no camera (CSI + /live/window only)')
+    ap.add_argument('--model', default=str(ROOT / 'data/ckpt/petr_v2.onnx'), help='exported ONNX pose model')
+    ap.add_argument('--mode', default='v2', choices=sorted(windowing.MODES), help='window preprocessing the model expects')
+    ap.add_argument('--backend', default='clikart', choices=['clikart', 'onnxruntime', 'off'],
+                    help='live CSI-only pose inference (clikart falls back to onnxruntime if it cannot start)')
+    ap.add_argument('--license', default=str(ROOT / 'Default_Project_Wifi_Sensing.txt'), help='ClikaRT credential file')
+    ap.add_argument('--infer-hz', type=float, default=4.0)
+    ap.add_argument('--no-serial', action='store_true', help='ignore boards on local USB (e.g. when replaying CSI over UDP)')
+    ap.add_argument('--smooth', type=float, default=0.5, help='exponential smoothing of displayed poses (0 = none)')
     ap.add_argument('--boards', default=','.join(WINDOW_CFG['boards']),
                     help='receiver order for /live/window (must match the training cache)')
     ap.add_argument('--pi', action='append', metavar='LABEL=IP',
@@ -378,9 +419,13 @@ def main():
     if args.pi:
         PIS.clear()
         PIS.update(p.split('=', 1) for p in args.pi)
-    loops = [(serial_watch, ()), (udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ())]
+    loops = [(udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ())]
+    if not args.no_serial:
+        loops.append((serial_watch, ()))
     if args.camera >= 0:
         loops.append((camera_loop, (args.camera,)))
+    if args.backend != 'off':
+        loops.append((infer_loop, (args,)))
     for target, a in loops:
         threading.Thread(target=target, args=a, daemon=True).start()
     print(f'live view: http://localhost:{args.port}/live', flush=True)
