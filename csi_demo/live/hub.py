@@ -36,6 +36,7 @@ import serial
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[1] / 'capture'))
 from csi_frames import REC_DTYPE, FrameParser  # noqa: E402
+import windowing  # noqa: E402
 from record_session import MODEL_PATH, MODEL_URL, to14  # noqa: E402
 
 HERE = Path(__file__).parent
@@ -82,7 +83,7 @@ def add(name, rec_bytes, arrival, source):
     with LOCK:
         t = CLOCKS[name].to_mac(int(r['t_us']), arrival)
         q = LINKS[(name, tx)]
-        q.append((t, amp, int(r['rssi']), int(r['seq']), int(r['rate'])))
+        q.append((t, amp, int(r['rssi']), int(r['seq']), int(r['rate']), r['csi'].copy()))
         while q and t - q[0][0] > KEEP_S:
             q.popleft()
         SOURCES[name] = source
@@ -281,6 +282,17 @@ def snapshot(rows=80):
                 cam={k: v for k, v in CAM.items() if k != 'jpeg'})
 
 
+WINDOW_CFG = {'boards': ['CSI-298988', 'CSI-wroom1', 'CSI-wroom2'], 'tx_ids': [1, 2, 3]}
+
+
+def live_window(mode):
+    with LOCK:
+        links = {k: (np.array([x[0] for x in q]), np.stack([x[5] for x in q]) if q else np.zeros((0, 104), np.int8))
+                 for k, q in LINKS.items()}
+    t = time.time()
+    return t, windowing.build_window(links, WINDOW_CFG['boards'], WINDOW_CFG['tx_ids'], t, mode)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -308,6 +320,31 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(1 / 15)
             except (BrokenPipeError, ConnectionResetError):
                 return
+        if self.path.startswith('/live/window'):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            mode = q.get('mode', ['v1'])[0]
+            t, w = live_window(mode if mode in windowing.MODES else 'v1')
+            if w is None:
+                body = json.dumps({'t': t, 'error': 'not enough recent packets on every link'}).encode()
+                self.send_response(503)
+                self.send_header('Content-Type', 'application/json')
+            elif q.get('format', ['json'])[0] == 'npy':
+                import io
+                buf = io.BytesIO()
+                np.save(buf, w)
+                body = buf.getvalue()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('X-Window-Time', f'{t:.3f}')
+            else:
+                body = json.dumps({'t': t, 'shape': list(w.shape), 'boards': WINDOW_CFG['boards'],
+                                   'tx_ids': WINDOW_CFG['tx_ids'], 'csi': np.round(w, 5).tolist()}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith('/live/state'):
             body, ctype = json.dumps(snapshot()).encode(), 'application/json'
         elif self.path.startswith('/live'):
@@ -331,15 +368,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, default=8766)
     ap.add_argument('--udp', type=int, default=5599)
-    ap.add_argument('--camera', type=int, default=1)
+    ap.add_argument('--camera', type=int, default=1, help='webcam index; -1 = no camera (CSI + /live/window only)')
+    ap.add_argument('--boards', default=','.join(WINDOW_CFG['boards']),
+                    help='receiver order for /live/window (must match the training cache)')
     ap.add_argument('--pi', action='append', metavar='LABEL=IP',
                     help='transmitter Pi to show status for (repeatable); default: this setup\'s two Pis')
     args = ap.parse_args()
+    WINDOW_CFG['boards'] = args.boards.split(',')
     if args.pi:
         PIS.clear()
         PIS.update(p.split('=', 1) for p in args.pi)
-    for target, a in ((serial_watch, ()), (udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ()),
-                      (camera_loop, (args.camera,))):
+    loops = [(serial_watch, ()), (udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ())]
+    if args.camera >= 0:
+        loops.append((camera_loop, (args.camera,)))
+    for target, a in loops:
         threading.Thread(target=target, args=a, daemon=True).start()
     print(f'live view: http://localhost:{args.port}/live', flush=True)
     ThreadingHTTPServer(('0.0.0.0', args.port), Handler).serve_forever()

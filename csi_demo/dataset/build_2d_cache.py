@@ -23,6 +23,7 @@ N_KPT = 14
 SUB_ORDER = np.r_[np.arange(-26, 0), np.arange(1, 27)]
 TARGET_SUB = np.array([-28, -26, -24, -22, -20, -18, -16, -14, -12, -10, -8, -6, -4, -2, -1,
                        1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 28])
+OPTS = {'phase': False, 'packet_norm': False}
 try:
     WAVELET = pywt.Wavelet('dB11')
 except ValueError:
@@ -61,7 +62,10 @@ def load_board(board_dir, tx_id=None):
             iq = rec['csi'].astype(np.float32).reshape(-1, 52, 2)
             amp = np.hypot(iq[..., 1], iq[..., 0])  # |real + j*imag|, order +1..+26, -26..-1
             amp = np.concatenate([amp[:, 26:], amp[:, :26]], axis=1)  # -> -26..-1, +1..+26
-            amps.append(np.stack([np.interp(TARGET_SUB, SUB_ORDER, a) for a in amp]))
+            feat = np.stack([np.interp(TARGET_SUB, SUB_ORDER, a) for a in amp])
+            if OPTS['phase']:
+                feat = np.concatenate([feat, sanitized_phase(iq)], axis=1)
+            amps.append(feat)
     if not times:
         raise ValueError(f'no records in {board_dir}' + (f' from tx {tx_id}' if tx_id else ''))
     t = np.concatenate(times)
@@ -73,13 +77,50 @@ def load_board(board_dir, tx_id=None):
     return t[order], a[order]
 
 
+def sanitized_phase(iq):
+    """Single-antenna form of the paper's CSI_sanitization: per packet, unwrap the phase over subcarriers
+    and remove the least-squares line (random offset + timing slope); keep the residual, resampled to 30."""
+    c = (iq[..., 1] + 1j * iq[..., 0])
+    c = np.concatenate([c[:, 26:], c[:, :26]], axis=1)  # -> -26..-1, +1..+26
+    ph = np.unwrap(np.angle(c), axis=1)
+    A = np.stack([SUB_ORDER, np.ones_like(SUB_ORDER)], 1).astype(np.float64)
+    coef, *_ = np.linalg.lstsq(A, ph.T, rcond=None)
+    res = ph - (A @ coef).T
+    return np.stack([np.interp(TARGET_SUB, SUB_ORDER, r) for r in res])
+
+
 def smooth_window(win):
-    """win: (20, 30) time-major amplitude -> wavelet-smoothed, mean-normalised window."""
-    rec = pywt.waverec(pywt.wavedec(win, WAVELET, 'sym', axis=0), WAVELET, axis=0)[:WIN]
-    return (rec / (rec.mean() + 1e-6)).astype(np.float32)
+    """win: (20, F) time-major; first 30 columns amplitude -> wavelet-smoothed, mean-normalised
+    (optionally each packet scaled to unit mean first, cancelling ESP32 AGC steps); further columns
+    (sanitized phase) are passed through."""
+    amp = win[:, :30]
+    if OPTS['packet_norm']:
+        amp = amp / (amp.mean(1, keepdims=True) + 1e-6)
+    rec = pywt.waverec(pywt.wavedec(amp, WAVELET, 'sym', axis=0), WAVELET, axis=0)[:WIN]
+    rec = rec / (rec.mean() + 1e-6)
+    return np.concatenate([rec, win[:, 30:]], axis=1).astype(np.float32)
 
 
-def convert_session(name, csi_root, labels_dir, boards, keep_empty, tx_ids=None, max_age=MAX_AGE_S):
+def smooth_labels(kpts, t, frames):
+    """Centered moving average of keypoint x, y over `frames` frames, never across gaps > 0.15 s."""
+    if frames <= 1:
+        return kpts
+    out = kpts.copy()
+    seg = np.r_[0, np.cumsum(np.diff(t) > 0.15)]
+    h = frames // 2
+    for s in np.unique(seg):
+        idx = np.where(seg == s)[0]
+        xy = kpts[idx, ..., :2]
+        csum = np.cumsum(np.concatenate([np.zeros_like(xy[:1]), xy]), axis=0)
+        lo = np.clip(np.arange(len(idx)) - h, 0, len(idx))
+        hi = np.clip(np.arange(len(idx)) + h + 1, 0, len(idx))
+        shape = (-1,) + (1,) * (xy.ndim - 1)
+        out[idx, ..., :2] = (csum[hi] - csum[lo]) / (hi - lo).reshape(shape)
+    return out
+
+
+def convert_session(name, csi_root, labels_dir, boards, keep_empty, tx_ids=None, max_age=MAX_AGE_S,
+                    label_smooth=1, vis_thr=0.5):
     links = [(b, t) for b in boards for t in (tx_ids or [None])]
     boards_data = [load_board(Path(csi_root) / b, t) for b, t in links]
     n_tx = len(tx_ids or [None])
@@ -88,8 +129,12 @@ def convert_session(name, csi_root, labels_dir, boards, keep_empty, tx_ids=None,
         kpts = z['keypoints'].astype(np.float32)
         nump = z['num_person'].astype(np.int64)
         kpts3d = z['keypoints3d'].astype(np.float32) if 'keypoints3d' in z else None
+    vis = kpts[..., 2] if kpts.shape[-1] > 2 else np.ones(kpts.shape[:-1], np.float32)
+    clipped = (kpts[..., 0] <= 1e-3) | (kpts[..., 0] >= 1 - 1e-3) | (kpts[..., 1] <= 1e-3) | (kpts[..., 1] >= 1 - 1e-3)
+    vis = ((vis > vis_thr) & ~clipped).astype(np.float32)
+    kpts = smooth_labels(kpts, t_mac, label_smooth)
     skipped = {'no_csi_window': 0, 'no_person': 0}
-    csi, kp, npers, names, kp3 = [], [], [], [], []
+    csi, kp, npers, names, kp3, kv = [], [], [], [], [], []
     for i, T in enumerate(t_mac):
         if nump[i] == 0 and not keep_empty:
             skipped['no_person'] += 1
@@ -104,22 +149,23 @@ def convert_session(name, csi_root, labels_dir, boards, keep_empty, tx_ids=None,
         if wins is None:
             skipped['no_csi_window'] += 1
             continue
-        csi.append(np.stack(wins).reshape(len(boards), n_tx, WIN, 30))
+        csi.append(np.stack(wins).reshape(len(boards), n_tx, WIN, -1))
         kp.append(kpts[i, :, :, :2])
+        kv.append(vis[i])
         if kpts3d is not None:
             kp3.append(kpts3d[i, :, :, :3])
         npers.append(nump[i])
         names.append(f'{name}_{i}')
     info = dict(frames=len(t_mac), kept=len(csi), skipped=skipped,
                 time_span=[float(t_mac.min()), float(t_mac.max())] if len(t_mac) else None)
-    return csi, kp, npers, names, info, kp3
+    return csi, kp, npers, names, info, kp3, kv
 
 
-def write_cache(out, boards, parts, sessions_info, kp3_parts=(), n_tx=1):
+def write_cache(out, boards, parts, sessions_info, kp3_parts=(), n_tx=1, vis_parts=()):
     out.mkdir(parents=True, exist_ok=True)
     p_max = max([k.shape[0] for _, kp, _, _ in parts for k in kp] or [1])
     csi = np.stack([c for p in parts for c in p[0]]).astype(np.float32) if any(p[0] for p in parts) \
-        else np.zeros((0, len(boards), n_tx, WIN, 30), np.float32)
+        else np.zeros((0, len(boards), n_tx, WIN, 60 if OPTS['phase'] else 30), np.float32)
     keypoints = np.zeros((len(csi), p_max, N_KPT, 2), np.float32)
     n = 0
     for _, kp, _, _ in parts:
@@ -132,6 +178,12 @@ def write_cache(out, boards, parts, sessions_info, kp3_parts=(), n_tx=1):
     np.save(out / 'keypoints.npy', keypoints)
     np.save(out / 'num_person.npy', num_person)
     np.save(out / 'names.npy', names)
+    kv = [k for p in vis_parts for k in p]
+    if kv and len(kv) == len(csi):
+        v = np.zeros((len(csi), p_max, N_KPT), np.float32)
+        for i, k in enumerate(kv):
+            v[i, :k.shape[0]] = k
+        np.save(out / 'keypoints_vis.npy', v)
     kp3 = [k for p in kp3_parts for k in p]
     if kp3 and len(kp3) == len(csi):
         k3 = np.zeros((len(csi), p_max, N_KPT, 3), np.float32)
@@ -163,7 +215,11 @@ def main():
     ap.add_argument('--max-age', type=float, default=None,
                     help='oldest record allowed in a window, s (default 0.5; 0.7 with --tx-ids, since the weakest '
                          'links deliver only ~35-50 of each transmitter\'s 100 packets/s)')
+    ap.add_argument('--phase', action='store_true', help='append sanitized phase: 30 -> 60 values per packet')
+    ap.add_argument('--packet-norm', action='store_true', help='scale each packet to unit mean amplitude first')
+    ap.add_argument('--label-smooth', type=int, default=1, help='moving-average keypoints over N frames')
     args = ap.parse_args()
+    OPTS.update(phase=args.phase, packet_norm=args.packet_norm)
     tx_ids = [int(t) for t in args.tx_ids.split(',') if t] or None
     n_tx = len(tx_ids or [None])
     max_age = args.max_age or (0.7 if tx_ids else MAX_AGE_S)
@@ -177,7 +233,7 @@ def main():
         name = labels_path.parent.name if labels_path.name == 'labels' else labels_path.name
         if name in results:
             raise SystemExit(f'duplicate session name {name!r} (taken from the labels directory name)')
-        res = convert_session(name, csi_root, labels_dir, boards, args.keep_empty, tx_ids, max_age)
+        res = convert_session(name, csi_root, labels_dir, boards, args.keep_empty, tx_ids, max_age, args.label_smooth)
         results[name] = res
         print(f'[{name}] kept {res[4]["kept"]}/{res[4]["frames"]} frames, skipped {res[4]["skipped"]}')
     unknown = test_names - set(results)
@@ -189,11 +245,12 @@ def main():
         for split, pick in (('train', lambda n: n not in test_names), ('test', lambda n: n in test_names)):
             names = [n for n in results if pick(n)]
             meta = write_cache(out / split, boards, [results[n][:4] for n in names],
-                               {n: results[n][4] for n in names}, [results[n][5] for n in names], n_tx)
+                               {n: results[n][4] for n in names}, [results[n][5] for n in names], n_tx,
+                               [results[n][6] for n in names])
             print(f'{split}: {meta["counts"]["frames_kept"]} frames from {names}')
     else:
         meta = write_cache(out, boards, [r[:4] for r in results.values()], {n: r[4] for n, r in results.items()},
-                           [r[5] for r in results.values()], n_tx)
+                           [r[5] for r in results.values()], n_tx, [r[6] for r in results.values()])
         print(f'wrote {meta["counts"]["frames_kept"]} frames to {out}')
 
 

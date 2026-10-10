@@ -230,4 +230,11 @@ PYTHONPATH=. python csi_demo/infer/predict.py configs/wifi/petr_wifi_esp_multitx
 # dashboard machine (has the session video): overlay prediction (red) vs camera label (green)
 csi_demo/.venv/bin/python csi_demo/infer/render_gif.py preds.npz --cache data/cache_9link --split test --out clip.gif
 ```
-Inference is offline (recorded sessions); live on-dashboard inference is not implemented.
+**Live input for real-time inference:** while `hub.py` runs (add `--camera -1` to skip the webcam),
+`GET http://localhost:8766/live/window?mode=v1` returns the newest model-ready window built from the last
+20 packets of every link, preprocessed exactly like `build_2d_cache.py` (`mode=v2` adds sanitized phase
+and per-packet normalisation, 60 values per packet; `&format=npy` returns a raw `.npy` instead of JSON).
+It answers 503 until every link has 20 packets within the last 0.7 s. Feed it to the model at 2-5 Hz
+(one window = `simple_test` input with a batch axis added) to get live poses. The window code is
+`csi_demo/live/windowing.py`; replaying recorded sessions through it reproduces the training cache
+exactly.

@@ -38,11 +38,18 @@ def main():
     ap.add_argument('config')
     ap.add_argument('ckpts', nargs='+')
     ap.add_argument('--cache', default='data/cache_room1')
+    ap.add_argument('--gt-cache', default=None,
+                    help='take labels from this cache instead (same frames), e.g. unsmoothed labels for a fair '
+                         'comparison when --cache was built with --label-smooth')
     args = ap.parse_args()
 
     tr_kp = np.load(f'{args.cache}/train/keypoints.npy')[:, 0]
     te_csi = np.load(f'{args.cache}/test/csi.npy')
-    gt = np.load(f'{args.cache}/test/keypoints.npy')[:, 0]
+    gt_cache = args.gt_cache or args.cache
+    gt = np.load(f'{gt_cache}/test/keypoints.npy')[:, 0]
+    if args.gt_cache:
+        assert (np.load(f'{args.cache}/test/names.npy') == np.load(f'{gt_cache}/test/names.npy')).all()
+        tr_kp = np.load(f'{gt_cache}/train/keypoints.npy')[:, 0]
     print(f'test frames {len(gt)}, train frames {len(tr_kp)}')
     report('baseline: mean pose', np.repeat(tr_kp.mean(0, keepdims=True), len(gt), 0), gt)
     rng = np.random.default_rng(0)

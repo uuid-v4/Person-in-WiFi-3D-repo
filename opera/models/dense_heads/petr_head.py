@@ -523,6 +523,8 @@ class PETRHead(AnchorFreeHead):
                 zip(gt_labels, gt_bboxes, gt_keypoints)):
             if gt_label.size(0) == 0:
                 continue
+            if gt_keypoint.dim() == 3 and gt_keypoint.shape[-1] == self.coord_dim + 1:
+                gt_keypoint = gt_keypoint[..., :self.coord_dim]
             gt_keypoint = gt_keypoint.reshape(gt_keypoint.shape[0], -1,
                                               self.coord_dim).clone()
             gt_keypoint[..., :2] /= 8
@@ -721,6 +723,11 @@ class PETRHead(AnchorFreeHead):
         """
 
         num_bboxes = kpt_pred.size(0)
+        # optional per-joint visibility as an extra last channel: joints with vis <= 0.5 get no loss
+        gt_vis = None
+        if gt_keypoints.dim() == 3 and gt_keypoints.shape[-1] == self.coord_dim + 1:
+            gt_vis = gt_keypoints[..., -1]
+            gt_keypoints = gt_keypoints[..., :self.coord_dim].contiguous()
         # assigner and sampler
         assign_result = self.assigner.assign(cls_score, kpt_pred, gt_labels,
                                              gt_keypoints, gt_areas, img_meta)
@@ -743,6 +750,8 @@ class PETRHead(AnchorFreeHead):
         valid_idx = pos_gt_kpts.new_ones((pos_gt_kpts.shape[0],
                                           pos_gt_kpts.shape[1]), dtype = torch.int64)
         valid_idx = valid_idx > 0
+        if gt_vis is not None:
+            valid_idx = gt_vis[sampling_result.pos_assigned_gt_inds] > 0.5
         pos_kpt_weights = kpt_weights[pos_inds].reshape(
             pos_gt_kpts.shape[0], kpt_weights.shape[-1] // self.coord_dim,
             self.coord_dim)
