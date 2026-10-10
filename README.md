@@ -1,3 +1,24 @@
+# Low-cost Wi-Fi pose estimation with ESP32 receivers (fork of Person-in-WiFi 3D)
+
+This fork rebuilds the Person-in-WiFi 3D pipeline with cheap hardware: **3 transmitters**
+(Raspberry Pi 5 + PAU0F, 2x RTL8192EU dongles) and **3 ESP32-S3 receivers** streaming CSI over USB,
+labelled by a webcam pose model, trained with the paper's PETR transformer in 2D mode.
+
+**Full guide (hardware layout, firmware, Pi setup, recording, dataset, training, results):
+[`csi_demo/README.md`](csi_demo/README.md)**
+
+Held-out session (never seen in training). Green = camera label, red = prediction from Wi-Fi only:
+
+![held-out prediction](csi_demo/docs/heldout_good.gif)
+
+On the held-out session the Wi-Fi model places 54% of joints within 10% of the image (error 12.5%),
+vs 30% / 15.5% for always predicting the average pose and 23% / 17.5% for the same model trained on
+shuffled CSI (1 person, 1 room, 30 min of data).
+
+The original project README follows.
+
+---
+
 # Person-in-WiFi 3D: End-to-End Multi-Person 3D Pose Estimation with Wi-Fi
 
 Wi-Fi signals, in contrast to cameras, offer privacy protection and occlusion resilience for some practical scenarios such as smart homes, elderly care, and virtual reality.
