@@ -23,6 +23,49 @@ Held-out session s3 (never seen in training). Green = camera label, red = predic
 The model tracks presence, height and overall posture and often the position; it still misses distinctive
 arm poses and drifts left-right by up to a body width (see `train/IMPROVEMENTS.md`).
 
+## Physical setup (as recorded)
+
+All devices at chest height on the corners/edges of a 1 m x 2 m rectangle; the person moves inside it.
+
+```
+                     top edge (1 m)
+   RX  n16r8 ------------ Mac + webcam ------------ TX1  PAU0F on rpi1
+   (USB-C to Mac)         (faces the area)              (MT7921, 6 Mbps, ch 6)
+      |                                                    |
+      |                                                    |
+      |                 person moves here                  |   left / right
+      |                  (labelled by the                  |   edges (2 m)
+      |                   webcam pose model)               |
+      |                                                    |
+   RX  wroom2 ------------ rpi2 + TX2, TX3 ------------ RX  wroom1
+   (USB to rpi2)       (2x RTL8192EU injecting)          (USB to rpi2)
+                     bottom edge (1 m)
+```
+
+- 3 transmitters x 3 receivers = 9 links; each receiver tags every CSI record with the transmitter id
+  (MACs 02:c5:1a:00:00:01..03), so all 9 links are separated in the data.
+- Every receiver must see every transmitter; links that cross the area where the person moves carry the
+  most information. In this placement the two RTLs share one spot, and the weakest links were
+  n16r8 <- tx2/tx3 and wroom1 <- tx2 (~35-50 of 100 frames/s). Spreading the RTLs (e.g. mid-left and
+  mid-right edges on USB extension cables) should help.
+- Use the Pis' black USB 2.0 ports for the Wi-Fi dongles (USB 3.0 ports interfere with 2.4 GHz; the
+  PAU0F hung on a blue port) and a 5 A supply for rpi2.
+- Keep the camera far/high enough to see the whole body; in our recordings the ankles were cut off.
+
+Data flow:
+
+```
+ rpi1: csi-tx (PAU0F, tx1) ~~~~\                      2.4 GHz ch 6, 6 Mbps OFDM, 100 frames/s each
+ rpi2: csi-tx (RTL tx2, tx3) ~~~+~~> ESP32 receivers measure CSI per frame (52 subcarriers, I/Q)
+                                        |
+        n16r8 --USB------------------->  |  Mac: live/hub.py  <-- webcam (MediaPipe 2D+3D pose)
+        wroom1, wroom2 --USB--> rpi2: forwarder.py --UDP:5599--> hub   (records data/sessions/<name>/)
+                                        |
+        dataset/build_2d_cache.py --> (N, 3 rx, 3 tx, 20 packets, 30 subcarriers) + keypoints
+                                        |
+        tools/train.py (PETR, 2D) on a GPU --> 14 keypoints per frame from Wi-Fi alone
+```
+
 ## Layout
 
 ```
