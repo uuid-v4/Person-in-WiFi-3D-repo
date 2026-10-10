@@ -10,20 +10,38 @@ This fork adds a full capture -> dataset -> training pipeline to the Person-in-W
 - **Receivers (3):** ESP32-S3 boards measuring CSI (52 subcarriers) for every injected frame,
   streaming it over USB (one to the Mac, two to a second Pi that forwards over UDP).
 - **Labels:** MacBook webcam + MediaPipe pose (14 keypoints, 2D + 3D).
-- **Model:** the repo's PETR detector in 2D mode; input = 3 rx x 3 tx x 20 packets x 30 subcarriers.
+- **Model:** the repo's PETR detector in 2D mode. Final model (v2): input = 3 rx x 3 tx x 20 packets x
+  (30 amplitudes + 30 sanitized phases), config `configs/wifi/petr_wifi_esp_multitx_2d_v2.py`.
 
-Result (30 min of data, 1 person, train s1+s2, test on unseen s3, epoch 10, single most-confident pose):
-joint error 12.5% of image, 54% of joints within 10% — vs 15.5% / 30% for always predicting the average
-pose and 17.5% / 23% for the same model trained on shuffled (unpaired) CSI.
+## Results
 
-Held-out session s3 (never seen in training). Green = camera label, red = prediction from Wi-Fi CSI only
-(epoch-5 model; first clip is one of the better stretches, second is typical):
+30 min of data, 1 person, one room: trained on sessions s1+s2 (26,091 windows), tested on the unseen
+session s3 (11,784 windows). Score = the single most confident predicted pose per window vs the camera
+label (`csi_demo/train/eval_room1.py`, raw labels); error in % of image size, pck@x = share of joints
+within x of the image.
 
-![held-out, good stretch](csi_demo/docs/heldout_good.gif)
-![held-out, typical stretch](csi_demo/docs/heldout_typical.gif)
+| Model | Joint error | pck@0.05 | pck@0.1 | Upper-body pck@0.1 |
+|---|---|---|---|---|
+| **v2, epoch 25 (final)** | **10.37%** | **0.337** | **0.648** | **0.643** |
+| v1 (amplitude only), best epoch | 11.87% | 0.292 | 0.594 | 0.585 |
+| Same v1 model trained on shuffled CSI (epoch 10) | 17.46% | 0.050 | 0.225 | 0.253 |
+| Always predict the average training pose | 15.52% | 0.102 | 0.304 | 0.291 |
 
-The model tracks presence, height and overall posture and often the position; it still misses distinctive
-arm poses and drifts left-right by up to a body width (see [`csi_demo/train/IMPROVEMENTS.md`](csi_demo/train/IMPROVEMENTS.md)).
+v2 = v1 + sanitized phase input, per-packet gain normalisation, 5-frame label smoothing, no loss on
+clipped/low-visibility joints, link-dropout and noise augmentation, weight decay 0.05, cosine LR
+(details: [`csi_demo/train/IMPROVEMENTS.md`](csi_demo/train/IMPROVEMENTS.md)). The shuffled-CSI control
+(same labels, CSI rows permuted) shows the accuracy comes from the Wi-Fi signal, not from label statistics.
+
+Held-out session s3, never seen in training (v2 epoch 25). Green = camera label, red = prediction from
+Wi-Fi CSI only; per-clip mean joint error in brackets:
+
+| Walking sideways (8.2%) | Standing, arms folded (7.0%) | Facing the camera (9.9%) |
+|---|---|---|
+| ![](csi_demo/docs/v2_heldout_1.gif) | ![](csi_demo/docs/v2_heldout_2.gif) | ![](csi_demo/docs/v2_heldout_3.gif) |
+
+The model tracks presence, position, height, overall posture and leg movement; it still tends to draw the
+arms down for distinctive arm poses (folded, spread, hands on head). Limits: one person, one room and
+layout, data recorded on one day; generalisation to other people or rooms is untested.
 
 ## Physical setup (as recorded)
 
