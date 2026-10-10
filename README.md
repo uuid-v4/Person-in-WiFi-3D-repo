@@ -80,7 +80,8 @@ csi_demo/
   live/            hub.py (Mac): USB + UDP CSI ingest, webcam pose, session recorder, live page;
                    forwarder.py (Pi): USB CSI -> UDP; csi_frames.py: stream parser
   dataset/         build_2d_cache.py: sessions -> training cache (CSI windows + keypoints)
-  train/           eval_room1.py (strict held-out evaluation), IMPROVEMENTS.md (v2 plan), Wiception3D tools
+  infer/           predict.py (checkpoint -> poses), render_gif.py (prediction vs label overlay)
+  train/           setup_wsl.sh (training env), eval_room1.py (strict held-out evaluation), IMPROVEMENTS.md (v2 plan), Wiception3D tools
   ble/             BLE collector + per-link check (fallback path, no USB)
   capture/         BLE-era session recorder (MediaPipe helpers reused by live/hub.py)
   legacy/          superseded experiments (serial dashboard, ESP-NOW tx, old inference)
@@ -120,49 +121,113 @@ CSI token width (`csi_in_channels`), cached dataset loader, `pck2d` metric, fast
 Not in git (regenerated or downloaded): `data/` (recordings, caches), `work_dirs/`, ESP-IDF `build/`,
 `managed_components/`, `sdkconfig`, model weights (`*.task` is downloaded by the hub on first run).
 
-### 1. Host (Mac)
-```bash
-python3 -m venv csi_demo/.venv && csi_demo/.venv/bin/pip install -r csi_demo/requirements.txt
-```
+End to end: **install (1-4) -> record with the dashboard (5) -> build dataset (6) -> train (7) -> infer (8)**.
 
-### 2. Receivers (ESP32-S3, ESP-IDF 5.5)
+### 1. Host / dashboard machine (macOS tested; Linux should work)
 ```bash
-cd csi_demo/esp_ble_rx && idf.py set-target esp32s3 && idf.py -p <PORT> flash
+git clone <this repo> && cd Person-in-WiFi-3D-repo
+python3.12 -m venv csi_demo/.venv
+csi_demo/.venv/bin/pip install -r csi_demo/requirements.txt
 ```
-Boards name themselves `CSI-<last 3 MAC bytes>`; rename over BLE with the `NAME=` command if wanted.
+macOS asks for camera access the first time `hub.py` opens the webcam: allow it for your terminal app.
+`ssh` key access to the Pis (`ssh-copy-id sijin@<pi>`) is only needed for the status panel.
 
-### 3. Transmitter Pis (Raspberry Pi OS, kernel headers installed)
+### 2. Receivers: flash the ESP32-S3 boards (ESP-IDF v5.5.1)
+Install ESP-IDF once ([official guide](https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/get-started/)):
 ```bash
-# PAU0F: bash csi_demo/pau0f_driver/install.sh
-# RTL8192EU: add drivers/net/wireless/realtek/rtl8xxxu to a kernel source checkout matching `uname -r`,
-#   python3 csi_demo/rtl_driver/apply_patch.py <tree>/drivers/net/wireless/realtek/rtl8xxxu/core.c
-#   make -C /lib/modules/$(uname -r)/build M=<that dir> CONFIG_RTL8XXXU=m modules
-#   sudo cp rtl8xxxu.ko /lib/modules/$(uname -r)/updates/ && sudo depmod -a
-sudo apt install python3-scapy
-cp csi_demo/tx/tx.py ~/tx.py
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf && ./install.sh esp32s3 && . ./export.sh
+```
+Then for each board (plug its **USB** port, not UART):
+```bash
+cd csi_demo/esp_ble_rx
+idf.py set-target esp32s3            # first time only
+idf.py -p /dev/cu.usbmodemXXXX flash  # Linux: /dev/ttyACM0
+```
+A board names itself `CSI-<last 3 MAC bytes>` (e.g. `CSI-298988`). Optional: rename by writing `NAME=wroom1`
+to the BLE control characteristic (`c51a0002-...`, e.g. from nRF Connect); it saves to flash and reboots.
+Boards on a Pi can also be flashed from the Pi:
+`python3 -m esptool --chip esp32s3 -p /dev/serial/by-id/<board> --no-stub write_flash 0x0 bootloader.bin 0xa000 partition-table.bin 0x20000 esp_ble_rx.bin`
+(files from `build/`).
+
+### 3. Transmitter Pis: drivers + injector service
+Raspberry Pi OS (64-bit, trixie tested), Pi 5. Plug the Wi-Fi dongles into the **black USB 2.0** ports.
+Stock drivers send injected frames at 1 Mbps DSSS (no CSI on the ESP32); the patched ones honour the
+radiotap rate (6 Mbps OFDM). Both installers fetch only the needed kernel driver folder for the running
+kernel, build it out of tree, install it under `/lib/modules/$(uname -r)/updates/` and reload it
+(originals untouched; the scripts print how to revert):
+```bash
+git clone <this repo> && cd Person-in-WiFi-3D-repo
+bash csi_demo/pau0f_driver/install.sh    # Panda PAU0F / MT7921U
+bash csi_demo/rtl_driver/install.sh      # RTL8192EU dongles (rtl8xxxu)
+```
+Re-run the installer after a kernel upgrade (`uname -r` changed), or hold the kernel:
+`sudo apt-mark hold linux-image-rpi-2712`. Then the injector service:
+```bash
+sudo apt install -y python3-scapy
+cp csi_demo/tx/tx.py ~/tx.py                        # csi-tx-all.sh expects /home/sijin/tx.py: edit TX= if your user differs
 sudo install -m755 csi_demo/tx/csi-tx-all.sh /usr/local/bin/csi-tx-all
-sudo install -m644 csi_demo/pi/csi-tx.conf /etc/csi-tx.conf        # edit MACs for your dongles
-sudo install -m644 csi_demo/pi/csi-tx.service /etc/systemd/system/ && sudo systemctl enable --now csi-tx
+ip -br link                                         # note each dongle's MAC
+sudo install -m644 csi_demo/pi/csi-tx.conf /etc/csi-tx.conf && sudo nano /etc/csi-tx.conf   # one line per dongle: id MAC 100
+sudo install -m644 csi_demo/pi/csi-tx.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now csi-tx
+journalctl -u csi-tx -f                             # expect "tx N: sent=... rate=100.0/s" per dongle
 ```
-Receiver Pi (boards on USB): copy `csi_demo/live/forwarder.py` + `live/csi_frames.py` to `~`, set the Mac's IP in
-`csi_demo/pi/csi-forward.service`, install and enable it the same way.
 
-### 4. Record
+### 4. Receiver Pi (ESP32s on USB): forwarder service
 ```bash
-csi_demo/.venv/bin/python csi_demo/live/hub.py --camera 1      # http://localhost:8766/live
+sudo apt install -y python3   # stdlib only
+cp csi_demo/live/forwarder.py csi_demo/live/csi_frames.py ~/
+sudo nano csi_demo/pi/csi-forward.service    # set --hub <dashboard machine IP>, path if your user differs
+sudo install -m644 csi_demo/pi/csi-forward.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now csi-forward
+journalctl -u csi-forward -f                 # expect "CSI-xxxx=80/s ..." per board
 ```
-Check all 9 links show LIVE and the whole body is in frame, then Start sessions (e.g. s1, s2, s3, 10 min).
+(Boards plugged straight into the dashboard machine need no forwarder.)
 
-### 5. Build dataset, train, evaluate
+### 5. Collect data with the dashboard
 ```bash
-csi_demo/.venv/bin/python csi_demo/dataset/build_2d_cache.py --boards CSI-298988,CSI-wroom1,CSI-wroom2 \
+csi_demo/.venv/bin/python csi_demo/live/hub.py --camera 1 --pi tx-pi=<IP> --pi rx-pi=<IP>
+# open http://localhost:8766/live
+```
+Check: every receiver x transmitter cell shows **LIVE** (~40-90 pkt/s), the skeleton follows you and the whole
+body is in frame. Enter a session name + minutes, press **Start**, move around (walk, arms, turn, crouch,
+pause); it saves automatically to `data/sessions/<name>/`. Record at least 3 x 10 min and keep one session for
+testing. Keep every device in place between sessions.
+
+### 6. Build the dataset
+```bash
+csi_demo/.venv/bin/python csi_demo/dataset/build_2d_cache.py --boards <rx1>,<rx2>,<rx3> \
   --tx-ids 1,2,3 --session data/sessions/s1/csi:data/sessions/s1/labels \
   --session data/sessions/s2/csi:data/sessions/s2/labels --session data/sessions/s3/csi:data/sessions/s3/labels \
   --out data/cache_9link --split-by-session s3
-# GPU machine with this repo's MMCV/MMDet environment (see docs/get_started.md):
+```
+`--boards` are the receiver names shown on the dashboard; keep the same order for every build.
+
+### 7. Train (Linux/WSL2 + NVIDIA GPU)
+One-time environment (conda, PyTorch 1.13.1+cu117, MMCV 1.5.3 with CUDA ops, vendored MMDetection 2.25):
+```bash
+ARCH=8.6 bash csi_demo/train/setup_wsl.sh   # ARCH = GPU compute capability (8.0 A100, 8.6 RTX30, 8.9 RTX40)
+conda activate piw3d
+```
+Copy `data/cache_9link/` to the GPU machine (same relative path), then:
+```bash
 PYTHONPATH=. python tools/train.py configs/wifi/petr_wifi_esp_multitx_2d.py --seed 0 --deterministic
 PYTHONPATH=. python csi_demo/train/eval_room1.py configs/wifi/petr_wifi_esp_multitx_2d.py \
   work_dirs/petr_wifi_esp_multitx_2d/epoch_10.pth --cache data/cache_9link
 ```
-Use your own board names in `--boards`. For a control, train once more on a copy of the cache with
-`train/csi.npy` rows permuted; the real model must beat it and the mean-pose baseline.
+50 epochs take ~3.5-7 h on one A100. For a control, train once more on a copy of the cache with
+`train/csi.npy` rows permuted; the real model must beat it and the mean-pose baseline (both printed by
+`eval_room1.py`).
+
+### 8. Inference and visualisation
+```bash
+# GPU machine: predict the most confident pose for each window of a split
+PYTHONPATH=. python csi_demo/infer/predict.py configs/wifi/petr_wifi_esp_multitx_2d.py \
+  work_dirs/petr_wifi_esp_multitx_2d/epoch_10.pth --cache data/cache_9link --split test \
+  --start 0 --count 300 --out preds.npz
+# dashboard machine (has the session video): overlay prediction (red) vs camera label (green)
+csi_demo/.venv/bin/python csi_demo/infer/render_gif.py preds.npz --cache data/cache_9link --split test --out clip.gif
+```
+Inference is offline (recorded sessions); live on-dashboard inference is not implemented.
