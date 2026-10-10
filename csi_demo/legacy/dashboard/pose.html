@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wi-Fi 2D pose</title>
+<style>
+body{background:#111;color:#ddd;font:14px system-ui;margin:20px}
+canvas{background:#1c1c1c;border:1px solid #333}
+#wrap{display:flex;gap:20px;flex-wrap:wrap}
+pre{font-size:12px;color:#9a9}
+</style></head><body>
+<h2>Wi-Fi CSI &rarr; 2D pose (PETR, 3 ESP32 receivers)</h2>
+<div id="wrap">
+<canvas id="c" width="560" height="560"></canvas>
+<div><div id="info"></div><pre id="detail"></pre>
+<p style="color:#a88">Model: 1-epoch smoke checkpoint trained on Wiception3D (other room/hardware) &mdash; pipeline demo, not accurate poses.</p></div>
+<div id="raw"><h3 style="margin:0 0 6px">Raw CSI amplitude (52 subcarriers &times; time)</h3></div>
+</div>
+<script>
+const EDGES=[[0,1],[0,2],[0,3],[2,4],[4,8],[3,6],[6,10],[2,5],[3,7],[5,7],[5,9],[9,12],[7,11],[11,13]];
+const COLORS=['#4fc3f7','#ffb74d','#ba68c8'];
+const c=document.getElementById('c'),g=c.getContext('2d');
+let state=null,idx=0;
+async function poll(){try{const r=await fetch('/state');const s=await r.json();
+ if(!state||s.updated!==state.updated){idx=0}state=s;}catch(e){}
+ const s=state;if(!s)return;
+ const lat=s.frames.length?(Date.now()/1000-s.frames[s.frames.length-1].t).toFixed(0):'-';
+ document.getElementById('info').innerHTML=`cycle ${s.cycle} &middot; <b>${s.status}</b><br>frames ${s.frames.length} &middot; data age ${lat} s`+(s.error?`<br><span style="color:#f66">${s.error}</span>`:'');
+ document.getElementById('detail').textContent=Object.entries(s.boards).map(([k,v])=>k+': '+v).join('\n')+'\n\n'+(s.windows_log||'');}
+function draw(){g.clearRect(0,0,560,560);
+ if(state&&state.frames.length){const f=state.frames[idx%state.frames.length];idx++;
+  const W=560;g.fillStyle='#888';g.fillText(`t = ${new Date(f.t*1000).toLocaleTimeString()}  frame ${idx%state.frames.length}/${state.frames.length}`,10,16);
+  f.people.forEach((p,i)=>{const a=0.35+0.65*p.score;g.globalAlpha=a;g.strokeStyle=g.fillStyle=COLORS[i];g.lineWidth=3;
+   for(const [u,v] of EDGES){g.beginPath();g.moveTo(p.kp[u][0]*W,p.kp[u][1]*W);g.lineTo(p.kp[v][0]*W,p.kp[v][1]*W);g.stroke();}
+   for(const k of p.kp){g.beginPath();g.arc(k[0]*W,k[1]*W,4,0,7);g.fill();}
+   g.fillText(p.score.toFixed(2),p.kp[1][0]*W+6,p.kp[1][1]*W-6);g.globalAlpha=1;});}}
+const rawCv={};
+function drawRaw(){if(!state)return;const box=document.getElementById('raw');
+ const cur=state.frames.length?state.frames[(idx-1+state.frames.length)%state.frames.length].t:null;
+ for(const [name,r] of Object.entries(state.raw||{})){
+  if(!rawCv[name]){const d=document.createElement('div');d.innerHTML=`<div class=lbl></div><canvas width=420 height=150></canvas><canvas width=420 height=70></canvas>`;box.appendChild(d);rawCv[name]=d;}
+  const d=rawCv[name],[hm,ln]=d.querySelectorAll('canvas');
+  d.querySelector('.lbl').textContent=`${name}: ${r.n} records, rssi ${r.rssi}`;
+  const h=hm.getContext('2d');h.fillStyle='#000';h.fillRect(0,0,420,150);if(!r.amp.length)continue;
+  let mx=1;for(const row of r.amp)for(const v of row)if(v>mx)mx=v;
+  const N=r.amp.length,cw=420/N,rh=150/52;
+  for(let i=0;i<N;i++)for(let k=0;k<52;k++){const v=r.amp[i][k]/mx;h.fillStyle=`hsl(${240-240*v},90%,${15+45*v}%)`;h.fillRect(i*cw,k*rh,cw+1,rh+1);}
+  let j=N-1;if(cur!==null){j=r.t.findIndex(t=>t>=cur);if(j<0)j=N-1;h.strokeStyle='#fff';h.beginPath();h.moveTo(j*cw,0);h.lineTo(j*cw,150);h.stroke();}
+  const l=ln.getContext('2d');l.fillStyle='#181818';l.fillRect(0,0,420,70);l.strokeStyle='#8f8';l.beginPath();
+  r.amp[j].forEach((v,k)=>{const x=k*420/51,y=68-66*v/mx;k?l.lineTo(x,y):l.moveTo(x,y);});l.stroke();}}
+setInterval(drawRaw,1000/5);
+setInterval(poll,1000);setInterval(draw,1000/15);poll();
+</script></body></html>

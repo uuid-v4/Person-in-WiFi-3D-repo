@@ -83,7 +83,6 @@ class KptMSECost(object):
         Returns:
             torch.Tensor: kpt_cost value with weight.
         """
-        kpt_cost = []
         # if(self.align is not None):
         #     root_gt = gt_keypoints[:,self.align].mean(1).unsqueeze(1)
         #     root_pred = kpt_pred[:,self.align].mean(1).unsqueeze(1)
@@ -96,21 +95,11 @@ class KptMSECost(object):
 
         #     new_valid_kpt_flag = gt_keypoints.new_ones(gt_keypoints.shape[0], 1)
         #     valid_kpt_flag = torch.cat((new_valid_kpt_flag, valid_kpt_flag), 1)
-        for i in range(len(gt_keypoints)):
-            kpt_pred_tmp = kpt_pred.clone()
-            valid_flag = valid_kpt_flag[i] > 0
-            valid_flag_expand = valid_flag.unsqueeze(0).unsqueeze(
-                -1).expand_as(kpt_pred_tmp)
-            kpt_pred_tmp[~valid_flag_expand] = 0
-            cost = torch.cdist(
-                kpt_pred_tmp.reshape(kpt_pred_tmp.shape[0], -1),
-                gt_keypoints[i].reshape(-1).unsqueeze(0),
-                p=2)
-            avg_factor = torch.clamp(valid_flag.float().sum() * 2, 1.0)
-            cost = cost / avg_factor
-            kpt_cost.append(cost)
-        kpt_cost = torch.cat(kpt_cost, dim=1)
-        return kpt_cost * self.weight
+        valid = (valid_kpt_flag > 0).to(kpt_pred.dtype)
+        masked_pred = kpt_pred.unsqueeze(1) * valid[None, :, :, None]
+        kpt_cost = (masked_pred - gt_keypoints.unsqueeze(0)).pow(2).sum((2, 3)).sqrt()
+        avg_factor = torch.clamp(valid.sum(1) * 2, min=1.0)
+        return kpt_cost / avg_factor[None] * self.weight
 
 
 @MATCH_COST.register_module()

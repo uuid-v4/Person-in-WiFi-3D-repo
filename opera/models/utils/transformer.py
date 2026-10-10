@@ -211,11 +211,13 @@ class PetrTransformerDecoder(TransformerLayerSequence):
                  *args,
                  return_intermediate=False,
                  num_keypoints=17,
+                 coord_dim=3,
                  **kwargs):
 
         super(PetrTransformerDecoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
         self.num_keypoints = num_keypoints
+        self.coord_dim = coord_dim
 
     def forward(self,
                 query,
@@ -253,7 +255,8 @@ class PetrTransformerDecoder(TransformerLayerSequence):
 
             if kpt_branches is not None:
                 tmp = kpt_branches[lid](output)
-                if reference_points.shape[-1] == self.num_keypoints * 3:
+                if reference_points.shape[-1] == \
+                        self.num_keypoints * self.coord_dim:
                     new_reference_points = tmp + reference_points
                     new_reference_points = new_reference_points
                 else:
@@ -281,10 +284,12 @@ class PetrRefineTransformerDecoder(TransformerLayerSequence):
             `LN`.
     """
 
-    def __init__(self, *args, return_intermediate=False, **kwargs):
+    def __init__(self, *args, return_intermediate=False, coord_dim=3,
+                 **kwargs):
 
         super(PetrRefineTransformerDecoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
+        self.coord_dim = coord_dim
 
     def forward(self,
                 query,
@@ -318,7 +323,7 @@ class PetrRefineTransformerDecoder(TransformerLayerSequence):
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            assert reference_points.shape[-1] == 3
+            assert reference_points.shape[-1] == self.coord_dim
             output = layer(
                 output,
                 *args,
@@ -327,10 +332,10 @@ class PetrRefineTransformerDecoder(TransformerLayerSequence):
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
-                assert reference_points.shape[-1] == 3
+                assert reference_points.shape[-1] == self.coord_dim
                 new_reference_points = tmp
-                new_reference_points[..., :3] = tmp[
-                    ..., :3] + reference_points
+                new_reference_points[..., :self.coord_dim] = tmp[
+                    ..., :self.coord_dim] + reference_points
                 new_reference_points = new_reference_points
                 reference_points = new_reference_points.detach()
 
@@ -357,6 +362,9 @@ class PETRTransformer(Transformer):
             Default: 4.
         two_stage_num_proposals (int): Number of proposals when set
             `as_two_stage` as True. Default: 300.
+        coord_dim (int): Number of coordinates per keypoint (3 for 3D,
+            2 for 2D). Propagated to the decoder and refine decoder.
+            Default: 3.
     """
 
     def __init__(self,
@@ -384,8 +392,13 @@ class PETRTransformer(Transformer):
                  num_feature_levels=4,
                  two_stage_num_proposals=100,
                  num_keypoints=17,
+                 coord_dim=3,
                  **kwargs):
         super(PETRTransformer, self).__init__(**kwargs)
+        assert coord_dim in (2, 3), \
+            f'coord_dim must be 2 or 3, but got {coord_dim}.'
+        self.coord_dim = coord_dim
+        self.decoder.coord_dim = coord_dim
         self.as_two_stage = as_two_stage
         self.num_feature_levels = num_feature_levels
         self.two_stage_num_proposals = two_stage_num_proposals
@@ -393,6 +406,7 @@ class PETRTransformer(Transformer):
         self.num_keypoints = num_keypoints
         self.init_layers()
         self.refine_decoder = build_transformer_layer_sequence(refine_decoder)
+        self.refine_decoder.coord_dim = coord_dim
 
     def init_layers(self):
         """Initialize layers of the DeformableDetrTransformer."""
@@ -555,7 +569,7 @@ class PETRTransformer(Transformer):
         query = query.unsqueeze(0).expand(pos_num, -1, -1)
         reference_points = reference_points_pose.reshape(
             pos_num,
-            reference_points_pose.size(1) // 3, 3)
+            reference_points_pose.size(1) // self.coord_dim, self.coord_dim)
         query = query.permute(1, 0, 2)
         query_pos = query_pos.permute(1, 0, 2)
         pos_memory = memory[:, img_inds, :]

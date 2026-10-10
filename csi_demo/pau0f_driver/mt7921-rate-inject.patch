@@ -1,0 +1,71 @@
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7921/mac.c b/drivers/net/wireless/mediatek/mt76/mt7921/mac.c
+index 6da6705..864aee5 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7921/mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7921/mac.c
+@@ -774,6 +774,38 @@ mt7921_usb_sdio_write_txwi(struct mt792x_dev *dev, struct mt76_wcid *wcid,
+ 	skb_push(skb, MT_SDIO_TXD_SIZE);
+ }
+ 
++
++/* csi-demo: honour radiotap rate on injected frames (monitor mode) */
++static bool
++mt7921_injected_rate(struct mt792x_dev *dev, struct ieee80211_tx_info *info,
++		     u16 *rate)
++{
++	struct ieee80211_tx_rate *r = &info->control.rates[0];
++	struct mt76_phy *mphy = &dev->mphy;
++	struct ieee80211_supported_band *sband;
++	u8 mode, idx, nss = 0;
++
++	if (!(info->control.flags & IEEE80211_TX_CTRL_RATE_INJECT) || r->idx < 0)
++		return false;
++
++	if (r->flags & IEEE80211_TX_RC_MCS) {
++		mode = MT_PHY_TYPE_HT;
++		idx = r->idx & 7;
++		nss = (r->idx >> 3) & 3;
++	} else {
++		sband = mphy->hw->wiphy->bands[info->band];
++		if (!sband || r->idx >= sband->n_bitrates)
++			return false;
++		mode = sband->bitrates[r->idx].hw_value >> 8;
++		idx = sband->bitrates[r->idx].hw_value & 0xff;
++	}
++
++	*rate = FIELD_PREP(MT_TX_RATE_NSS, nss) |
++		FIELD_PREP(MT_TX_RATE_IDX, idx) |
++		FIELD_PREP(MT_TX_RATE_MODE, mode);
++	return true;
++}
++
+ int mt7921_usb_sdio_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
+ 				   enum mt76_txq_id qid, struct mt76_wcid *wcid,
+ 				   struct ieee80211_sta *sta,
+@@ -784,6 +816,8 @@ int mt7921_usb_sdio_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
+ 	struct ieee80211_key_conf *key = info->control.hw_key;
+ 	struct sk_buff *skb = tx_info->skb;
+ 	int err, pad, pktid, type;
++	bool inj;
++	u16 inj_rate = 0;
+ 
+ 	if (unlikely(tx_info->skb->len <= ETH_HLEN))
+ 		return -EINVAL;
+@@ -804,8 +838,18 @@ int mt7921_usb_sdio_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
+ 		}
+ 	}
+ 
++	inj = mt7921_injected_rate(dev, info, &inj_rate);
+ 	pktid = mt76_tx_status_skb_add(&dev->mt76, wcid, skb);
+ 	mt7921_usb_sdio_write_txwi(dev, wcid, qid, sta, key, pktid, skb);
++	if (inj) {
++		__le32 *txwi = (__le32 *)skb->data;
++
++		txwi[2] |= cpu_to_le32(MT_TXD2_FIX_RATE | MT_TXD2_HTC_VLD);
++		txwi[3] |= cpu_to_le32(MT_TXD3_BA_DISABLE);
++		txwi[6] &= ~cpu_to_le32(MT_TXD6_TX_RATE);
++		txwi[6] |= cpu_to_le32(MT_TXD6_FIXED_BW |
++				       FIELD_PREP(MT_TXD6_TX_RATE, inj_rate));
++	}
+ 
+ 	type = mt76_is_sdio(mdev) ? MT7921_SDIO_DATA : 0;
+ 	mt792x_skb_add_usb_sdio_hdr(dev, skb, type);

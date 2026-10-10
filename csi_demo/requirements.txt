@@ -1,0 +1,8 @@
+# Mac / host side (live hub, recorder, dataset builder, BLE fallback)
+numpy
+pyserial
+bleak
+opencv-python
+mediapipe
+PyWavelets
+pillow

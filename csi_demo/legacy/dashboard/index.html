@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSI Live</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #12161b; --line: #1f262e; --text: #e6edf3; --muted: #7d8a97;
+    --accent: #4cc2ff; --ok: #3fd18b; --warn: #f5b84a; --bad: #ff6b6b;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 -apple-system, "Inter", system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .2px; white-space: nowrap; }
+  .pill { font: 12px var(--mono); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.live { color: var(--ok); border-color: #1e4d36; }
+  .pill.down { color: var(--bad); border-color: #5a2626; }
+  .spacer { flex: 1; }
+  #presence { font: 600 13px var(--mono); padding: 6px 12px; border-radius: 8px; background: #161b21; border: 1px solid var(--line); min-width: 150px; text-align: center; transition: background .2s, color .2s; }
+  #presence.motion { background: #3a2a0c; color: var(--warn); border-color: #6b4d14; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); gap: 16px; padding: 16px 20px 24px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 16px; display: grid; gap: 10px; }
+  .card-head { display: flex; align-items: baseline; gap: 10px; }
+  .card-head h2 { font-size: 14px; margin: 0; }
+  .port { font: 12px var(--mono); color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { background: #0e1216; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font: 600 16px var(--mono); }
+  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; display: flex; justify-content: space-between; }
+  canvas { width: 100%; display: block; border-radius: 6px; background: #07090b; }
+  .heat { height: 190px; image-rendering: pixelated; }
+  .profile { height: 130px; }
+  .spark { height: 70px; }
+  footer { padding: 0 20px 20px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 600px) {
+    main { padding: 12px; gap: 12px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .card { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wi-Fi CSI · live</h1>
+  <span id="conn" class="pill">connecting</span>
+  <span id="txinfo" class="pill">tx —</span>
+  <div class="spacer"></div>
+  <div id="presence">calibrating…</div>
+</header>
+<main id="grid"></main>
+<footer>Amplitude |H| of 52 OFDM data subcarriers (−26…26). Heatmap scrolls right→left, ~6 s. Motion = mean coefficient of variation of amplitude over the last 1 s; the presence label compares it to the first 10 s (keep the room still while it calibrates).</footer>
+
+<template id="card-tpl">
+  <section class="card">
+    <div class="card-head"><h2></h2><span class="port"></span><div class="spacer"></div><span class="pill state">—</span></div>
+    <div class="stats">
+      <div class="stat"><b class="v-rate">—</b><span>frames/s</span></div>
+      <div class="stat"><b class="v-rssi">—</b><span>RSSI dBm</span></div>
+      <div class="stat"><b class="v-phy">—</b><span>PHY</span></div>
+      <div class="stat"><b class="v-motion">—</b><span>motion</span></div>
+    </div>
+    <div class="label"><span>Subcarrier amplitude over time</span><span>−26 ↑ … ↓ +26</span></div>
+    <canvas class="heat"></canvas>
+    <div class="label"><span>Current amplitude profile</span><span class="v-ampmax"></span></div>
+    <canvas class="profile"></canvas>
+    <div class="label"><span>Motion (last 30 s)</span><span class="v-base"></span></div>
+    <canvas class="spark"></canvas>
+  </section>
+</template>
+
+<script>
+const RATE_NAMES = {0:"1M",1:"2M",2:"5.5M",3:"11M",11:"6M",15:"9M",10:"12M",14:"18M",9:"24M",13:"36M",8:"48M",12:"54M"};
+const HEAT_COLS = 600, SPARK_LEN = 600, CAL_SECONDS = 10;
+const cards = new Map();
+const startedAt = performance.now();
+
+const VIRIDIS = [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
+function colormap(x) {
+  x = Math.max(0, Math.min(1, x)) * (VIRIDIS.length - 1);
+  const i = Math.floor(x), f = x - i, a = VIRIDIS[i], b = VIRIDIS[Math.min(i + 1, VIRIDIS.length - 1)];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+function fitCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
+  if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+    c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  }
+  return dpr;
+}
+
+function makeCard(rx) {
+  const node = document.getElementById("card-tpl").content.firstElementChild.cloneNode(true);
+  node.querySelector("h2").textContent = rx.id;
+  node.querySelector(".port").textContent = rx.port;
+  document.getElementById("grid").appendChild(node);
+  const heat = node.querySelector(".heat");
+  heat.width = HEAT_COLS; heat.height = 52;
+  const card = {
+    node, heat, hctx: heat.getContext("2d"),
+    profile: node.querySelector(".profile"), spark: node.querySelector(".spark"),
+    last: null, prev: null, scale: null, motion: [], baseline: [], baseValue: null,
+  };
+  card.hctx.fillStyle = "#07090b"; card.hctx.fillRect(0, 0, HEAT_COLS, 52);
+  cards.set(rx.id, card);
+  return card;
+}
+
+function pushHeatColumns(card, frames) {
+  if (!frames.length) return;
+  const ctx = card.hctx, n = frames.length;
+  for (const f of frames) card.scale = card.scale == null ? Math.max(...f) : card.scale * 0.995 + Math.max(...f) * 0.005;
+  ctx.drawImage(card.heat, n, 0, HEAT_COLS - n, 52, 0, 0, HEAT_COLS - n, 52);
+  const img = ctx.createImageData(n, 52);
+  frames.forEach((f, col) => {
+    for (let row = 0; row < 52; row++) {
+      const [r, g, b] = colormap(f[row] / (card.scale * 1.15));
+      const k = (row * n + col) * 4;
+      img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = 255;
+    }
+  });
+  ctx.putImageData(img, HEAT_COLS - n, 0);
+}
+
+function drawProfile(card) {
+  const c = card.profile, dpr = fitCanvas(c), ctx = c.getContext("2d"), W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#1f262e"; ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { ctx.beginPath(); ctx.moveTo(0, H * i / 4); ctx.lineTo(W, H * i / 4); ctx.stroke(); }
+  const ymax = card.scale * 1.3 || 1;
+  const trace = (f, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width * dpr; ctx.beginPath();
+    f.forEach((v, i) => { const x = (i / 51) * (W - 8 * dpr) + 4 * dpr, y = H - (v / ymax) * (H - 8 * dpr) - 4 * dpr; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  };
+  if (card.prev) trace(card.prev, "rgba(76,194,255,.25)", 1);
+  if (card.last) trace(card.last, "#4cc2ff", 1.6);
+  card.node.querySelector(".v-ampmax").textContent = `scale ${ymax.toFixed(0)}`;
+}
+
+function drawSpark(card) {
+  const c = card.spark, dpr = fitCanvas(c), ctx = c.getContext("2d"), W = c.width, H = c.height, m = card.motion;
+  ctx.clearRect(0, 0, W, H);
+  if (m.length < 2) return;
+  const ymax = Math.max(0.05, ...m, (card.baseValue || 0) * 3);
+  if (card.baseValue) {
+    const y = H - (card.baseValue * 2 / ymax) * H;
+    ctx.strokeStyle = "rgba(245,184,74,.5)"; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.strokeStyle = "#3fd18b"; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
+  m.forEach((v, i) => { const x = W - (m.length - 1 - i) * (W / SPARK_LEN), y = H - (v / ymax) * (H - 4 * dpr) - 2 * dpr; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+}
+
+function update(msg) {
+  const calibrating = (performance.now() - startedAt) / 1000 < CAL_SECONDS;
+  let anyMotion = false, anyBaseline = false;
+  for (const rx of msg.receivers) {
+    const card = cards.get(rx.id) || makeCard(rx);
+    pushHeatColumns(card, rx.frames);
+    if (rx.frames.length) { card.prev = card.last; card.last = rx.frames[rx.frames.length - 1]; }
+    if (rx.motion != null) {
+      card.motion.push(rx.motion); if (card.motion.length > SPARK_LEN) card.motion.shift();
+      if (calibrating) card.baseline.push(rx.motion);
+      else if (card.baseValue == null && card.baseline.length) {
+        const s = [...card.baseline].sort((a, b) => a - b); card.baseValue = s[Math.floor(s.length / 2)];
+      }
+    }
+    if (card.baseValue != null) { anyBaseline = true; if (rx.motion > card.baseValue * 2) anyMotion = true; }
+    const q = s => card.node.querySelector(s);
+    q(".v-rate").textContent = rx.rate_hz;
+    q(".v-rssi").textContent = rx.rssi ?? "—";
+    q(".v-phy").textContent = rx.rate_code == null ? "—" : `${RATE_NAMES[rx.rate_code] ?? rx.rate_code}${rx.sig_mode ? " HT" : ""}`;
+    q(".v-motion").textContent = rx.motion == null ? "—" : rx.motion.toFixed(3);
+    q(".v-base").textContent = card.baseValue == null ? "baseline: calibrating" : `baseline ${card.baseValue.toFixed(3)} · threshold ×2`;
+    const st = q(".state");
+    const live = rx.status === "live" && rx.rate_hz > 0;
+    st.textContent = live ? "receiving" : (rx.status === "live" ? "no frames" : rx.status);
+    st.className = "pill state " + (live ? "live" : "down");
+    drawProfile(card); drawSpark(card);
+  }
+  const p = document.getElementById("presence");
+  p.textContent = !anyBaseline ? "calibrating…" : anyMotion ? "MOTION DETECTED" : "still";
+  p.className = anyMotion ? "motion" : "";
+  document.getElementById("txinfo").textContent = `tx ${msg.tx_mac}`;
+}
+
+const es = new EventSource("/stream");
+const conn = document.getElementById("conn");
+es.onopen = () => { conn.textContent = "stream live"; conn.className = "pill live"; };
+es.onerror = () => { conn.textContent = "stream lost"; conn.className = "pill down"; };
+es.onmessage = e => update(JSON.parse(e.data));
+</script>
+</body>
+</html>

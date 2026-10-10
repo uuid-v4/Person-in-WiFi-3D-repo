@@ -21,10 +21,10 @@ class PETR(DETR):
     """Implementation of `End-to-End Multi-Person Pose Estimation with
     Transformers`"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, csi_in_channels=60, **kwargs):
         super(DETR, self).__init__(*args, **kwargs)
         #---------------------
-        self.head = Linear(60, 256)
+        self.head = Linear(csi_in_channels, 256)
         
         #--------only amp
         #self.head = Linear(30, 256)

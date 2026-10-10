@@ -1,0 +1,12 @@
+[Unit]
+Description=CSI frame injectors (PAU0F + RTL8192EU dongles, matched by MAC)
+After=network.target
+
+[Service]
+ExecStartPre=/bin/sleep 8
+ExecStart=/usr/local/bin/csi-tx-all
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

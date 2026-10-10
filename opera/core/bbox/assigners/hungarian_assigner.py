@@ -108,11 +108,14 @@ class PoseHungarianAssigner(BaseAssigner):
         cls_cost = self.cls_cost(cls_pred, gt_labels)
 
         # keypoint regression L1 cost
+        # gt arrives as (num_gt, K, C) with C = coord_dim (2 or 3); a
+        # flattened (num_gt, K*3) gt keeps the legacy 3-coordinate layout.
+        coord_dim = gt_keypoints.shape[-1] if gt_keypoints.dim() == 3 else 3
         gt_keypoints_reshape = gt_keypoints.reshape(gt_keypoints.shape[0], -1,
-                                                    3)
+                                                    coord_dim)
         valid_kpt_flag = gt_keypoints_reshape.new_ones(([num_gts, gt_keypoints_reshape.shape[1]]))
         kpt_pred_tmp = kpt_pred.clone().detach().reshape(
-            kpt_pred.shape[0], -1, 3)
+            kpt_pred.shape[0], -1, coord_dim)
 
         kpt_cost = self.kpt_cost(kpt_pred_tmp, gt_keypoints_reshape,
                                  valid_kpt_flag)

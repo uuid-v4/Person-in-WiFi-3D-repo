@@ -1,0 +1,31 @@
+Person-in-WiFi_3D_Unified_Model_for_3D_WiFi_Perception.pdf
+
+# recordings, caches, training outputs (regenerate; see csi_demo/README.md)
+data/
+work_dirs/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# ESP-IDF: generated per machine by `idf.py build`
+csi_demo/**/build/
+csi_demo/**/managed_components/
+csi_demo/**/sdkconfig
+csi_demo/**/sdkconfig.old
+.cache/
+
+# model weights downloaded at runtime
+*.pt
+*.pth
+*.task
+
+# local agent state and scratch
+.omc/
+.omo/
+IMG_*.PNG
+beacon.png
+hello.md
+.DS_Store

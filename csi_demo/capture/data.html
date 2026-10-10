@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wi-Fi pose dataset capture</title>
+<style>
+body{background:#111;color:#ddd;font:14px system-ui;margin:16px}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.card{background:#1a1a1a;border:1px solid #333;padding:10px;border-radius:6px}
+h3{margin:0 0 6px;font-size:14px;color:#9cf}
+#vid{position:relative;width:640px;height:480px}
+#vid img,#vid canvas{position:absolute;left:0;top:0}
+button{background:#a33;color:#fff;border:0;padding:6px 14px;border-radius:4px;cursor:pointer}
+.small{font-size:12px;color:#999}
+</style></head><body>
+<div class="row">
+ <div class="card"><h3>Camera + 2D pose (MediaPipe)</h3>
+  <div id="vid"><img src="/data/video" width="640" height="480"><canvas id="ov" width="640" height="480"></canvas></div></div>
+ <div>
+  <div class="card"><h3>3D pose (metres, hip-centred, rotating)</h3><canvas id="p3" width="320" height="320"></canvas></div>
+  <div class="card" style="margin-top:12px"><h3>Session</h3><div id="info"></div><br><button onclick="fetch('/data/stop',{method:'POST'})">Stop &amp; save</button></div>
+ </div>
+ <div class="card"><h3>CSI amplitude, last upload chunk (52 subcarriers &times; time)</h3><div id="csi"></div></div>
+</div>
+<script>
+const E=[[0,1],[0,2],[0,3],[2,4],[4,8],[3,6],[6,10],[2,5],[3,7],[5,7],[5,9],[9,12],[7,11],[11,13]];
+let S=null,ang=0;const cv={};
+async function poll(){try{S=await (await fetch('/data/state')).json();}catch(e){}}
+function ov(){const g=document.getElementById('ov').getContext('2d');g.clearRect(0,0,640,480);
+ if(!S||!S.kp2d)return;const k=S.kp2d;g.strokeStyle='#0f8';g.lineWidth=3;
+ for(const[a,b]of E){g.beginPath();g.moveTo(k[a][0]*640,k[a][1]*480);g.lineTo(k[b][0]*640,k[b][1]*480);g.stroke();}
+ g.fillStyle='#ff0';for(const p of k){g.beginPath();g.arc(p[0]*640,p[1]*480,4,0,7);g.fill();}}
+function p3(){const g=document.getElementById('p3').getContext('2d');g.fillStyle='#151515';g.fillRect(0,0,320,320);ang+=0.02;
+ if(!S||!S.kp3d)return;const c=Math.cos(ang),s=Math.sin(ang);
+ const P=S.kp3d.map(p=>[160+110*(p[0]*c-p[2]*s),160+110*p[1]]);
+ g.strokeStyle='#4fc3f7';g.lineWidth=3;for(const[a,b]of E){g.beginPath();g.moveTo(...P[a]);g.lineTo(...P[b]);g.stroke();}
+ g.fillStyle='#fff';for(const p of P){g.beginPath();g.arc(p[0],p[1],3,0,7);g.fill();}}
+function info(){if(!S)return;const el=(S.now-S.started)/60,left=Math.max(0,(S.end-S.now)/60);
+ const tot=Object.entries(S.csi).map(([k,v])=>`${k}: ${v.total||0}`).join(', ');
+ document.getElementById('info').innerHTML=`<b>${S.status}</b><br>elapsed ${el.toFixed(1)} min, left ${left.toFixed(1)} min<br>
+ camera ${S.fps} fps, frames ${S.frames}, with person ${S.posed}<br>CSI uploads ${S.chunks}; records ${tot||'-'}<br>
+ <span class=small>Pi tx: ${S.pi||'-'}</span>`;}
+function csi(){if(!S)return;const box=document.getElementById('csi');
+ for(const[name,r]of Object.entries(S.csi)){
+  if(!cv[name]){const d=document.createElement('div');d.innerHTML='<div class=lbl></div><canvas width=440 height=130></canvas>';box.appendChild(d);cv[name]=d;}
+  const d=cv[name],g=d.querySelector('canvas').getContext('2d');
+  d.querySelector('.lbl').textContent=`${name}: ${r.n} recs in chunk, ${r.hz} Hz, rssi ${r.rssi}`;
+  g.fillStyle='#000';g.fillRect(0,0,440,130);if(!r.amp.length)continue;
+  let mx=1;for(const row of r.amp)for(const v of row)if(v>mx)mx=v;const N=r.amp.length,cw=440/N,rh=130/52;
+  for(let i=0;i<N;i++)for(let k=0;k<52;k++){const v=r.amp[i][k]/mx;g.fillStyle=`hsl(${240-240*v},90%,${12+48*v}%)`;g.fillRect(i*cw,k*rh,cw+1,rh+1);}}}
+setInterval(poll,300);setInterval(()=>{ov();p3();},1000/20);setInterval(()=>{info();csi();},1000);
+</script></body></html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Live CSI links</title>
+<style>
+body{background:#111;color:#ddd;font:13px system-ui;margin:14px}
+table{border-collapse:separate;border-spacing:8px}
+td{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:6px;vertical-align:top}
+th{color:#9cf;font-weight:600}
+.lbl{font-size:12px;margin-bottom:3px}.dead{color:#f66}.ok{color:#8f8}
+#pis{font-size:12px;color:#aaa;margin-top:8px;white-space:pre}
+.top{display:flex;gap:12px;align-items:flex-start;margin-bottom:6px}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px}
+#vid{position:relative;width:480px;height:360px}#vid img,#vid canvas{position:absolute;left:0;top:0}
+button{border:0;padding:6px 14px;border-radius:4px;cursor:pointer;color:#fff}
+input{background:#222;color:#ddd;border:1px solid #444;padding:4px;width:70px}
+</style></head><body>
+<div class="top">
+ <div class="card"><div class=lbl>Camera + 2D pose (MediaPipe) <span id=camfps></span></div>
+  <div id="vid"><img src="/live/video" width=480 height=360><canvas id=ov width=480 height=360></canvas></div></div>
+ <div class="card"><div class=lbl>3D pose (metres, hip-centred, rotating)</div><canvas id=p3 width=300 height=300></canvas></div>
+ <div class="card" style="min-width:300px"><div class=lbl><b>Session</b></div>
+  name <input id=sname value="s1"> minutes <input id=smin value="10">
+  <div style="margin:8px 0"><button style="background:#2a7" onclick="ctl('start')">Start</button>
+  <button style="background:#a33" onclick="ctl('stop')">Stop &amp; save</button></div>
+  <div id=rec class=lbl></div></div>
+</div>
+<h2 style="margin:0 0 4px">Live CSI: receivers (rows) &times; transmitters (columns)</h2>
+<div class="lbl">Waterfall: last 6 s of gain-normalized amplitude, 52 subcarriers (top to bottom) &times; time (left to right). Line: current amplitude. "motion" = slow (0.3 s) variation; rises when someone moves through the link.</div>
+<table id="grid"></table><div id="pis"></div>
+<script>
+const TX={1:'tx1 PAU0F (rpi1)',2:'tx2 RTL (rpi2)',3:'tx3 RTL (rpi2)'};
+let S=null;const cells={};
+async function poll(){try{S=await (await fetch('/live/state')).json();}catch(e){}}
+function grid(){const rx=[...new Set(S.links.map(l=>l.rx))].sort();const tx=[1,2,3];
+ const g=document.getElementById('grid');const key=rx.join(',');if(g.dataset.k===key)return;g.dataset.k=key;
+ g.innerHTML='<tr><th></th>'+tx.map(t=>`<th>${TX[t]}</th>`).join('')+'</tr>'+rx.map(r=>'<tr><th>'+r+'</th>'+tx.map(t=>`<td id="c_${r}_${t}"><div class=lbl></div><canvas width=300 height=104></canvas><canvas width=300 height=46></canvas></td>`).join('')+'</tr>').join('');}
+function draw(){if(!S)return;grid();
+ for(const l of S.links){const td=document.getElementById(`c_${l.rx}_${l.tx}`);if(!td)continue;
+  const live=l.age!==null&&l.age<1.5;
+  td.querySelector('.lbl').innerHTML=`<span class=${live?'ok':'dead'}>${live?'LIVE':'stale'}</span> ${l.hz} pkt/s &middot; rssi ${l.rssi} &middot; rate ${l.rate} &middot; seq ${l.seq} &middot; motion <b>${l.motion.toFixed(3)}</b><br><span style="color:#888">${l.source}</span>`;
+  const [hm,ln]=td.querySelectorAll('canvas');const g=hm.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,300,104);
+  const N=l.amp.length;if(!N)continue;const cw=300/N,rh=104/52;
+  for(let i=0;i<N;i++)for(let k=0;k<52;k++){const v=Math.max(0,Math.min(1,(l.amp[i][k]-0.4)/1.2));g.fillStyle=`hsl(${240-240*v},90%,${12+48*v}%)`;g.fillRect(i*cw,k*rh,cw+1,rh+1);}
+  const c=ln.getContext('2d');c.fillStyle='#181818';c.fillRect(0,0,300,46);let mx=1;for(const v of l.cur)mx=Math.max(mx,v);
+  c.strokeStyle='#8f8';c.beginPath();l.cur.forEach((v,k)=>{const x=k*300/51,y=44-42*v/mx;k?c.lineTo(x,y):c.moveTo(x,y);});c.stroke();}
+ document.getElementById('pis').textContent=Object.entries(S.pis||{}).map(([k,v])=>k+': '+v).join('\n');}
+const E=[[0,1],[0,2],[0,3],[2,4],[4,8],[3,6],[6,10],[2,5],[3,7],[5,7],[5,9],[9,12],[7,11],[11,13]];let ang=0;
+async function ctl(a){const q=a==='start'?`?name=${encodeURIComponent(sname.value)}&minutes=${smin.value}`:'';
+ const r=await (await fetch('/live/'+a+q,{method:'POST'})).json();document.getElementById('rec').dataset.msg=r.msg||'';}
+function pose(){if(!S)return;const c=S.cam||{};document.getElementById('camfps').textContent=c.error?c.error:`${c.fps} fps${c.kp2d?'':' - no person'}`;
+ const g=ov.getContext('2d');g.clearRect(0,0,480,360);if(c.kp2d){const k=c.kp2d;g.strokeStyle='#0f8';g.lineWidth=3;
+  for(const[a,b]of E){g.beginPath();g.moveTo(k[a][0]*480,k[a][1]*360);g.lineTo(k[b][0]*480,k[b][1]*360);g.stroke();}
+  g.fillStyle='#ff0';for(const p of k){g.beginPath();g.arc(p[0]*480,p[1]*360,4,0,7);g.fill();}}
+ const h=p3.getContext('2d');h.fillStyle='#151515';h.fillRect(0,0,300,300);ang+=0.03;
+ if(c.kp3d){const cs=Math.cos(ang),sn=Math.sin(ang);const P=c.kp3d.map(p=>[150+100*(p[0]*cs-p[2]*sn),150+100*p[1]]);
+  h.strokeStyle='#4fc3f7';h.lineWidth=3;for(const[a,b]of E){h.beginPath();h.moveTo(...P[a]);h.lineTo(...P[b]);h.stroke();}}
+ const r=S.rec,el=document.getElementById('rec');
+ el.innerHTML=(r?`<span class=dead>&#9679; REC</span> <b>${r.name}</b> ${r.elapsed}s elapsed, ${r.left}s left<br>frames ${r.frames} (person ${r.posed})<br>`+
+  Object.entries(r.counts).sort().map(([k,v])=>`${k}: ${v}`).join('<br>'):'not recording')+`<br><span style="color:#888">${S.last||''}</span>`;}
+setInterval(poll,250);setInterval(draw,250);setInterval(pose,66);poll();
+</script></body></html>

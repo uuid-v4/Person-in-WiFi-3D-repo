@@ -214,6 +214,9 @@ class WifiPoseDataset(dataset):
                  proposal_nums=(100, 300, 1000),
                  iou_thrs=None,
                  metric_items=None):
+        metrics = metric if isinstance(metric, (list, tuple)) else [metric]
+        if 'pck2d' in metrics:
+            return self.evaluate_2d(results)
         mpjpe_3d_list = []
         mpjpe_h_list = []
         mpjpe_v_list = []
@@ -221,6 +224,8 @@ class WifiPoseDataset(dataset):
         for i in range(len(results)):
             info = self.get_item_single_frame(i)
             gt_keypoints = info['gt_keypoints']
+            if gt_keypoints.shape[-1] == 2:
+                return self.evaluate_2d(results)
             data_name = info['img_name']
             det_bboxes, det_keypoints = results[i]
             for label in range(len(det_keypoints)):
@@ -241,7 +246,34 @@ class WifiPoseDataset(dataset):
         result = {'mpjpe':mpjpe, 'mpjpeh':mpjpeh, 'mpjpev':mpjpev, 'mpjped':mpjped}
         return OrderedDict(result)
     
-    def calc_mpjpe(self, real, pred, no, root=0):
+    def evaluate_2d(self, results, thrs=(0.05, 0.1)):
+        """2D metrics on normalized [0, 1] keypoints (any C works).
+
+        Returns mpjpe2d (mean per-joint Euclidean error x100, i.e. percent of
+        image size) and pck@thr (fraction of joints within thr).
+        """
+        dist_list = []
+        for i in range(len(results)):
+            gt_keypoints = self.get_item_single_frame(i)['gt_keypoints']
+            gt_keypoints = torch.as_tensor(gt_keypoints, dtype=torch.float32)
+            det_bboxes, det_keypoints = results[i]
+            for label in range(len(det_keypoints)):
+                kpt_pred = torch.tensor(det_keypoints[label], dtype=gt_keypoints.dtype)
+                corres = self.match_poses(gt_keypoints, kpt_pred, root=[5, 7])
+                new_pred = kpt_pred[corres]
+                dist_list.append(torch.norm(gt_keypoints - new_pred, p=2, dim=-1).reshape(-1))
+        dists = torch.cat(dist_list) if dist_list else torch.zeros(0)
+        result = OrderedDict()
+        result['mpjpe2d'] = float(dists.mean()) * 100
+        for thr in thrs:
+            result[f'pck@{thr}'] = float((dists < thr).float().mean())
+        return result
+
+    def match_poses(self, real, pred, root=0):
+        """Greedy GT-to-prediction matching shared by the 3D and 2D metrics.
+
+        Returns corres (n,), the matched prediction index per GT (-1 if none).
+        """
         n = real.shape[0]
         m = pred.shape[0]
         j, c = pred.shape[1:]
@@ -275,6 +307,10 @@ class WifiPoseDataset(dataset):
                 else:
                     corres[min_idx[0][i]] = min_idx[1][i]
                     occupied[min_idx[1][i]] = 1
+        return corres
+
+    def calc_mpjpe(self, real, pred, no, root=0):
+        corres = self.match_poses(real, pred, root=root)
         new_pred = pred[corres]
         #np.save('/home/yankangwei/opera-main/result/pose_pred/%s.npy' %no, new_pred)
         #np.save('/home/yankangwei/opera-main/result/pose_gt/%s.npy' %no, real)

@@ -52,6 +52,8 @@ class PETRHead(AnchorFreeHead):
             transformer head.
         init_cfg (dict or list[dict], optional): Initialization config dict.
             Default: None.
+        coord_dim (int): Number of coordinates per keypoint, 3 for 3D
+            (x, y, z) or 2 for 2D (x, y). Default: 3.
     """
 
     def __init__(self,
@@ -88,6 +90,7 @@ class PETRHead(AnchorFreeHead):
                  loss_oks_refine=dict(type='opera.OKSLoss', loss_weight=2.0),
                  test_cfg=dict(max_per_img=100),
                  init_cfg=None,
+                 coord_dim=3,
                  **kwargs):
         # NOTE here use `AnchorFreeHead` instead of `TransformerHead`,
         # since it brings inconvenience when the initialization of
@@ -119,6 +122,10 @@ class PETRHead(AnchorFreeHead):
         self.as_two_stage = as_two_stage
         self.with_kpt_refine = with_kpt_refine
         self.num_keypoints = num_keypoints
+        assert coord_dim in (2, 3), \
+            f'coord_dim must be 2 or 3, but got {coord_dim}.'
+        self.coord_dim = coord_dim
+        transformer.setdefault('coord_dim', coord_dim)
         if self.as_two_stage:
             transformer['as_two_stage'] = self.as_two_stage
         else:
@@ -141,6 +148,9 @@ class PETRHead(AnchorFreeHead):
             positional_encoding)
         self.transformer = build_transformer(transformer)
         self.embed_dims = self.transformer.embed_dims
+        assert self.transformer.coord_dim == self.coord_dim, \
+            'bbox_head.coord_dim and bbox_head.transformer.coord_dim ' \
+            f'differ: {self.coord_dim} vs {self.transformer.coord_dim}.'
         assert 'num_feats' in positional_encoding
         num_feats = positional_encoding['num_feats']
         assert num_feats * 2 == self.embed_dims, 'embed_dims should' \
@@ -159,7 +169,7 @@ class PETRHead(AnchorFreeHead):
         for _ in range(self.num_kpt_fcs):
             kpt_branch.append(Linear(512, 512))
             kpt_branch.append(nn.ReLU())
-        kpt_branch.append(Linear(512, 3 * self.num_keypoints))
+        kpt_branch.append(Linear(512, self.coord_dim * self.num_keypoints))
         kpt_branch = nn.Sequential(*kpt_branch)
 
         def _get_clones(module, N):
@@ -186,7 +196,7 @@ class PETRHead(AnchorFreeHead):
         for _ in range(self.num_kpt_fcs):
             refine_kpt_branch.append(Linear(self.embed_dims, self.embed_dims))
             refine_kpt_branch.append(nn.ReLU())
-        refine_kpt_branch.append(Linear(self.embed_dims, 3))
+        refine_kpt_branch.append(Linear(self.embed_dims, self.coord_dim))
         refine_kpt_branch = nn.Sequential(*refine_kpt_branch)
         if self.with_kpt_refine:
             num_pred = self.transformer.refine_decoder.num_layers
@@ -276,7 +286,7 @@ class PETRHead(AnchorFreeHead):
             # reference = inverse_sigmoid(reference)
             outputs_class = self.cls_branches[lvl](hs[lvl])
             tmp_kpt = self.kpt_branches[lvl](hs[lvl])
-            assert reference.shape[-1] == self.num_keypoints * 3
+            assert reference.shape[-1] == self.num_keypoints * self.coord_dim
             tmp_kpt += reference
             outputs_kpt = tmp_kpt
             outputs_classes.append(outputs_class)
@@ -329,7 +339,7 @@ class PETRHead(AnchorFreeHead):
             else:
                 reference = inter_references[lvl - 1]
             tmp_kpt = self.refine_kpt_branches[lvl](hs[lvl])
-            assert reference.shape[-1] == 3
+            assert reference.shape[-1] == self.coord_dim
             tmp_kpt += reference
             outputs_kpt = tmp_kpt
             outputs_kpts.append(outputs_kpt)
@@ -514,7 +524,7 @@ class PETRHead(AnchorFreeHead):
             if gt_label.size(0) == 0:
                 continue
             gt_keypoint = gt_keypoint.reshape(gt_keypoint.shape[0], -1,
-                                              3).clone()
+                                              self.coord_dim).clone()
             gt_keypoint[..., :2] /= 8
             assert gt_keypoint[..., 0].max() <= w  # new coordinate system
             assert gt_keypoint[..., 1].max() <= h  # new coordinate system
@@ -528,7 +538,7 @@ class PETRHead(AnchorFreeHead):
                         gaussian_radius((gt_h[j], gt_w[j]), min_overlap=0.9)),
                     min=0, max=3)
                 for k in range(self.num_keypoints):
-                    if gt_keypoint[j, k, 2] > 0:
+                    if self.coord_dim < 3 or gt_keypoint[j, k, 2] > 0:
                         gt_kp = gt_keypoint[j, k, :2]
                         gt_kp_int = torch.floor(gt_kp)
                         draw_umich_gaussian(hm_target[i, k], gt_kp_int,
@@ -606,9 +616,9 @@ class PETRHead(AnchorFreeHead):
             reduce_mean(kpt_weights.sum()), min=1).item()
         # assert num_valid_kpt == (kpt_targets>0).sum().item()
         enp = [2,3,4,6,8,10]
-        weight_enhance = torch.ones_like(kpt_preds).reshape(-1,14,3)
+        weight_enhance = torch.ones_like(kpt_preds).reshape(-1,14,self.coord_dim)
         weight_enhance[:,enp,:] = weight_enhance[:,enp,:]*3
-        weight_enhance = weight_enhance.reshape(-1,42)
+        weight_enhance = weight_enhance.reshape(-1,14*self.coord_dim)
         '''loss_kpt = self.loss_kpt(
             kpt_preds*weight_enhance, kpt_targets*weight_enhance, kpt_weights, avg_factor=num_valid_kpt)'''
         loss_kpt = self.loss_kpt(
@@ -734,7 +744,8 @@ class PETRHead(AnchorFreeHead):
                                           pos_gt_kpts.shape[1]), dtype = torch.int64)
         valid_idx = valid_idx > 0
         pos_kpt_weights = kpt_weights[pos_inds].reshape(
-            pos_gt_kpts.shape[0], kpt_weights.shape[-1] // 3, 3)
+            pos_gt_kpts.shape[0], kpt_weights.shape[-1] // self.coord_dim,
+            self.coord_dim)
 
         pos_kpt_weights[valid_idx] = 1.0
         kpt_weights[pos_inds] = pos_kpt_weights.reshape(
@@ -816,9 +827,9 @@ class PETRHead(AnchorFreeHead):
             reduce_mean(kpt_weights.sum()), min=1).item()
         # assert num_valid_kpt == (kpt_targets>0).sum().item()
         enp = [2,3,4,6,8,10]
-        weight_enhance = torch.ones_like(kpt_preds).reshape(-1,14,3)
+        weight_enhance = torch.ones_like(kpt_preds).reshape(-1,14,self.coord_dim)
         weight_enhance[:,enp,:] = weight_enhance[:,enp,:]*3
-        weight_enhance = weight_enhance.reshape(-1,42)
+        weight_enhance = weight_enhance.reshape(-1,14*self.coord_dim)
         '''loss_kpt = self.loss_kpt_rpn(
             kpt_preds*weight_enhance, kpt_targets*weight_enhance, kpt_weights, avg_factor=num_valid_kpt)'''
         loss_kpt = self.loss_kpt_rpn(
@@ -861,9 +872,8 @@ class PETRHead(AnchorFreeHead):
                 are bounding box positions (tl_x, tl_y, br_x, br_y) and the
                 5-th column is a score between 0 and 1. The second item is a
                 (n,) tensor where each item is the predicted class label of
-                the corresponding box. The third item is an (n, K, 3) tensor
-                with [p^{1}_x, p^{1}_y, p^{1}_v, ..., p^{K}_x, p^{K}_y,
-                p^{K}_v] format.
+                the corresponding box. The third item is an
+                (n, K, coord_dim) tensor of keypoint coordinates.
         """
         cls_scores = all_cls_scores[-1]
         kpt_preds = all_kpt_preds[-1]
@@ -909,7 +919,8 @@ class PETRHead(AnchorFreeHead):
                     between 0 and 1.
                 - det_labels: Predicted labels of the corresponding box with
                     shape [num_query].
-                - det_kpts: Predicted keypoints with shape [num_query, K, 3].
+                - det_kpts: Predicted keypoints with shape
+                    [num_query, K, coord_dim].
         """
         assert len(cls_score) == len(kpt_pred)
         max_per_img = self.test_cfg.get('max_per_img', self.num_query)
