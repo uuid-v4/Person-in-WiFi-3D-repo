@@ -1,138 +1,168 @@
-# Low-cost Wi-Fi pose estimation with ESP32 receivers (fork of Person-in-WiFi 3D)
+# Wi-Fi CSI 2D pose with ESP32 receivers (Person-in-WiFi 3D, low-cost build)
 
-This fork rebuilds the Person-in-WiFi 3D pipeline with cheap hardware: **3 transmitters**
-(Raspberry Pi 5 + PAU0F, 2x RTL8192EU dongles) and **3 ESP32-S3 receivers** streaming CSI over USB,
-labelled by a webcam pose model, trained with the paper's PETR transformer in 2D mode.
+Fork of [Person-in-WiFi 3D](https://github.com/aiotgroup/Person-in-WiFi-3D-repo) (CVPR 2024); the original README is in [`PAPER_README.md`](PAPER_README.md). Our additions live in `csi_demo/`.
 
-**Full guide (hardware layout, firmware, Pi setup, recording, dataset, training, results):
-[`csi_demo/README.md`](csi_demo/README.md)**
+This fork adds a full capture -> dataset -> training pipeline to the Person-in-WiFi 3D code
+(`opera/`, PETR transformer) using cheap hardware instead of Intel 5300 cards:
 
-Held-out session (never seen in training). Green = camera label, red = prediction from Wi-Fi only:
+- **Transmitters (3):** Raspberry Pi 5 + Panda PAU0F (MT7921, tx1) and 2x RTL8192EU dongles (tx2, tx3),
+  injecting 6 Mbps OFDM frames on channel 6 at 100 frames/s each.
+- **Receivers (3):** ESP32-S3 boards measuring CSI (52 subcarriers) for every injected frame,
+  streaming it over USB (one to the Mac, two to a second Pi that forwards over UDP).
+- **Labels:** MacBook webcam + MediaPipe pose (14 keypoints, 2D + 3D).
+- **Model:** the repo's PETR detector in 2D mode; input = 3 rx x 3 tx x 20 packets x 30 subcarriers.
 
-![held-out prediction](csi_demo/docs/heldout_good.gif)
+Result (30 min of data, 1 person, train s1+s2, test on unseen s3, epoch 10, single most-confident pose):
+joint error 12.5% of image, 54% of joints within 10% — vs 15.5% / 30% for always predicting the average
+pose and 17.5% / 23% for the same model trained on shuffled (unpaired) CSI.
 
-On the held-out session the Wi-Fi model places 54% of joints within 10% of the image (error 12.5%),
-vs 30% / 15.5% for always predicting the average pose and 23% / 17.5% for the same model trained on
-shuffled CSI (1 person, 1 room, 30 min of data).
+Held-out session s3 (never seen in training). Green = camera label, red = prediction from Wi-Fi CSI only
+(epoch-5 model; first clip is one of the better stretches, second is typical):
 
-The original project README follows.
+![held-out, good stretch](csi_demo/docs/heldout_good.gif)
+![held-out, typical stretch](csi_demo/docs/heldout_typical.gif)
 
----
+The model tracks presence, height and overall posture and often the position; it still misses distinctive
+arm poses and drifts left-right by up to a body width (see [`csi_demo/train/IMPROVEMENTS.md`](csi_demo/train/IMPROVEMENTS.md)).
 
-# Person-in-WiFi 3D: End-to-End Multi-Person 3D Pose Estimation with Wi-Fi
+## Physical setup (as recorded)
 
-Wi-Fi signals, in contrast to cameras, offer privacy protection and occlusion resilience for some practical scenarios such as smart homes, elderly care, and virtual reality.
-Recent years have seen remarkable progress in the estimation of single-person 2D pose, single-person 3D pose, and multi-person 2D pose. This paper takes a step forward by introducing Person-in-WiFi 3D, a pioneering Wi-Fi
-system that accomplishes multi-person 3D pose estimation. Person-in-WiFi 3D has two main updates. Firstly, it has a greater number of Wi-Fi devices to enhance the capability for capturing spatial reflections from multiple individuals.
-Secondly, it leverages the Transformer for end-to-end estimation. Compared to its predecessor, Person-in-WiFi 3D is storage-efficient and fast. We deployed a proof-of-concept system in 4m × 3.5m areas and collected a dataset of over
-97K frames with seven volunteers. Person-in-WiFi 3D attains 3D joint localization errors of 91.7mm (1-person), 108.1mm (2-person), and 125.3mm (3-person), comparable to cameras and millimeter-wave radars.
+All devices at chest height on the corners/edges of a 1 m x 2 m rectangle; the person moves inside it.
 
+```
+                     top edge (1 m)
+   RX  n16r8 ------------ Mac + webcam ------------ TX1  PAU0F on rpi1
+   (USB-C to Mac)         (faces the area)              (MT7921, 6 Mbps, ch 6)
+      |                                                    |
+      |                                                    |
+      |                 person moves here                  |   left / right
+      |                  (labelled by the                  |   edges (2 m)
+      |                   webcam pose model)               |
+      |                                                    |
+   RX  wroom2 ------------ rpi2 + TX2, TX3 ------------ RX  wroom1
+   (USB to rpi2)       (2x RTL8192EU injecting)          (USB to rpi2)
+                     bottom edge (1 m)
+```
 
-Links to our Project: [Person-in-WiFi 3D: End-to-End Multi-Person 3D Pose Estimation with Wi-Fi](https://aiotgroup.github.io/Person-in-WiFi-3D/)
+- 3 transmitters x 3 receivers = 9 links; each receiver tags every CSI record with the transmitter id
+  (MACs 02:c5:1a:00:00:01..03), so all 9 links are separated in the data.
+- Every receiver must see every transmitter; links that cross the area where the person moves carry the
+  most information. In this placement the two RTLs share one spot, and the weakest links were
+  n16r8 <- tx2/tx3 and wroom1 <- tx2 (~35-50 of 100 frames/s). Spreading the RTLs (e.g. mid-left and
+  mid-right edges on USB extension cables) should help.
+- Use the Pis' black USB 2.0 ports for the Wi-Fi dongles (USB 3.0 ports interfere with 2.4 GHz; the
+  PAU0F hung on a blue port) and a 5 A supply for rpi2.
+- Keep the camera far/high enough to see the whole body; in our recordings the ankles were cut off.
 
-Links to our Code   : [Person-in-WiFi 3D repo](https://github.com/aiotgroup/Person-in-WiFi3D)
+Data flow:
 
- <img src="demo/demo mini.gif" width = "900" height = "300" alt="demo gif" align=center />
+```
+ rpi1: csi-tx (PAU0F, tx1) ~~~~\                      2.4 GHz ch 6, 6 Mbps OFDM, 100 frames/s each
+ rpi2: csi-tx (RTL tx2, tx3) ~~~+~~> ESP32 receivers measure CSI per frame (52 subcarriers, I/Q)
+                                        |
+        n16r8 --USB------------------->  |  Mac: live/hub.py  <-- webcam (MediaPipe 2D+3D pose)
+        wroom1, wroom2 --USB--> rpi2: forwarder.py --UDP:5599--> hub   (records data/sessions/<name>/)
+                                        |
+        dataset/build_2d_cache.py --> (N, 3 rx, 3 tx, 20 packets, 30 subcarriers) + keypoints
+                                        |
+        tools/train.py (PETR, 2D) on a GPU --> 14 keypoints per frame from Wi-Fi alone
+```
 
-## Prerequisites
+## Layout
 
-- Linux
-- Python 3.7+
-- PyTorch 1.8+
-- CUDA 10.1+
-- [MMCV](https://mmcv.readthedocs.io/en/latest/#installation)
-- [MMDetection](https://mmdetection.readthedocs.io/en/latest/#installation)
+```
+csi_demo/
+  esp_ble_rx/      ESP32-S3 receiver firmware (ESP-IDF): CSI from tx ids 1-15, live USB stream + BLE buffer
+  tx/              tx.py injector + csi-tx-all.sh (one injector per dongle, matched by MAC)
+  pi/              systemd units and /etc/csi-tx.conf for the Pis
+  pau0f_driver/    mt7921 patch + installer (honour radiotap rate on injected frames)
+  rtl_driver/      rtl8xxxu patch (same for RTL8192EU)
+  live/            hub.py (Mac): USB + UDP CSI ingest, webcam pose, session recorder, live page;
+                   forwarder.py (Pi): USB CSI -> UDP; csi_frames.py: stream parser
+  dataset/         build_2d_cache.py: sessions -> training cache (CSI windows + keypoints)
+  train/           eval_room1.py (strict held-out evaluation), IMPROVEMENTS.md (v2 plan), Wiception3D tools
+  ble/             BLE collector + per-link check (fallback path, no USB)
+  capture/         BLE-era session recorder (MediaPipe helpers reused by live/hub.py)
+  legacy/          superseded experiments (serial dashboard, ESP-NOW tx, old inference)
+configs/wifi/petr_wifi_esp_multitx_2d.py   training config for the 9-link dataset
+```
 
-## Getting Started
+Changes to the paper's code (`opera/`, `third_party/mmdet`): 2D keypoint mode (`coord_dim`), configurable
+CSI token width (`csi_in_channels`), cached dataset loader, `pck2d` metric, faster keypoint match cost.
 
-### Installation
+## What is and is not reproducible
 
-Please see [get_started.md](docs/get_started.md) for the basic usage of Opera.
+- **Reproducible from this repo:** the whole pipeline — firmware, driver patches, transmitter/forwarder
+  services, live hub + recorder, dataset builder, training config, evaluation — on equivalent hardware.
+- **Not bit-exact:** the reported numbers come from our own recordings (one person, one room, 30 min),
+  which are not published (they include video of the subject). With your own hardware you get your own
+  dataset; expect the same *test* (real CSI beats mean-pose and shuffled-CSI baselines on a held-out
+  session), not the same digits. Wi-Fi CSI depends on the room, device placement and the person.
+- **Training randomness:** train with `--seed 0 --deterministic` for repeatable runs on one machine.
+- **Tested versions:** Mac Python 3.12.12 (`csi_demo/requirements.txt`, pinned); ESP-IDF v5.5.1 (components pinned
+  in `csi_demo/esp_ble_rx/dependencies.lock`); Raspberry Pi OS 13 (trixie), kernel 6.18.50+rpt-rpi-2712; training
+  Python 3.8.20, PyTorch 1.13.1+cu117, MMCV 1.5.3 (built with CUDA ops), MMDetection 2.25.0 (vendored),
+  NumPy 1.23.5, on an NVIDIA A100.
+- **Setup-specific values you must change:**
 
-## Acknowledgement
+  | What | Where |
+  |---|---|
+  | Transmitter dongle MACs | `csi_demo/pi/csi-tx.conf` |
+  | Mac IP the receiver Pi forwards to | `csi_demo/pi/csi-forward.service` (`--hub`) |
+  | Receiver board names by USB serial | `csi_demo/live/forwarder.py --name MAC=NAME` (or rename boards over BLE) |
+  | Transmitter Pi IPs for the status panel | `csi_demo/live/hub.py --pi LABEL=IP` |
+  | Webcam index | `csi_demo/live/hub.py --camera N` |
+  | Board names / order in the dataset | `csi_demo/dataset/build_2d_cache.py --boards ...` |
+  | Layout description saved per session | `LAYOUT` in `csi_demo/live/hub.py` |
 
-Opera is an open source project built upon [OpenMMLab](https://github.com/open-mmlab/). We appreciate all the contributors who implement this flexible and efficient toolkits.
+## Reproduce
 
+Not in git (regenerated or downloaded): `data/` (recordings, caches), `work_dirs/`, ESP-IDF `build/`,
+`managed_components/`, `sdkconfig`, model weights (`*.task` is downloaded by the hub on first run).
 
-
-### File Structrue
+### 1. Host (Mac)
 ```bash
-.
-│  LICENSE
-│  README.md
-│  requirements.txt
-│  setup.cfg
-│  setup.py
-├─data
-│  ├─wifipose
-│  │  ├─train_data
-│  │  │     ├─ csi
-│  │  │     ├─ keypoint
-│  │  │     ├─ train_data_list.txt
-│  │  ├─test_data
-│  │  │     ├─ csi
-│  │  │     ├─ keypoint
-│  │  │     ├─ test_data_list.txt
-├─config
-│  ├─base
-│  ├─wifi
-│  │  ├─petr_wifi.py
-├─docs
-│  ├─get_started.md
-├─opera
-│  ├─apis
-│  ├─core
-│  ├─datasets
-│  ├─models
-│  ├─__init__.py
-│  ├─version.py
-├─requirements
-│  ├─build.txt
-│  ├─docs.txt
-│  ├─mminstall.txt
-│  ├─optional.txt
-│  ├─readthedocs.txt
-│  ├─runtime.txt
-│  ├─tests.txt
-├─result
-├─third_party
-│  ├─mmcv
-│  ├─mmdet
-├─tools
-│  ├─dataset_converters
-│  ├─dist_test.sh
-│  ├─dist_train.sh
-│  ├─eval_metric.py
-│  ├─test_all.sh
-│  ├─test.py
-│  ├─train.py
-
-
+python3 -m venv csi_demo/.venv && csi_demo/.venv/bin/pip install -r csi_demo/requirements.txt
 ```
 
-
-## Citations
-
-If you find our works useful in your research, please consider citing:
-```BibTeX
-@inproceedings{person3dyan,
-  title={Person-in-WiFi 3D: End-to-End Multi-Person 3D Pose Estimation with Wi-Fi },
-  author={Yan, Kangwei and Wang, Fei and Qian, Bo and Ding, Han and Han, Jinsong and Wei, Xing},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  year = {2024}
-}
-
-@inproceedings{shi2022end,
-  title={End-to-End Multi-Person Pose Estimation With Transformers},
-  author={Shi, Dahu and Wei, Xing and Li, Liangqi and Ren, Ye and Tan, Wenming},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  pages={11069--11078},
-  year={2022}
-}
-
-
+### 2. Receivers (ESP32-S3, ESP-IDF 5.5)
+```bash
+cd csi_demo/esp_ble_rx && idf.py set-target esp32s3 && idf.py -p <PORT> flash
 ```
+Boards name themselves `CSI-<last 3 MAC bytes>`; rename over BLE with the `NAME=` command if wanted.
 
-## License
+### 3. Transmitter Pis (Raspberry Pi OS, kernel headers installed)
+```bash
+# PAU0F: bash csi_demo/pau0f_driver/install.sh
+# RTL8192EU: add drivers/net/wireless/realtek/rtl8xxxu to a kernel source checkout matching `uname -r`,
+#   python3 csi_demo/rtl_driver/apply_patch.py <tree>/drivers/net/wireless/realtek/rtl8xxxu/core.c
+#   make -C /lib/modules/$(uname -r)/build M=<that dir> CONFIG_RTL8XXXU=m modules
+#   sudo cp rtl8xxxu.ko /lib/modules/$(uname -r)/updates/ && sudo depmod -a
+sudo apt install python3-scapy
+cp csi_demo/tx/tx.py ~/tx.py
+sudo install -m755 csi_demo/tx/csi-tx-all.sh /usr/local/bin/csi-tx-all
+sudo install -m644 csi_demo/pi/csi-tx.conf /etc/csi-tx.conf        # edit MACs for your dongles
+sudo install -m644 csi_demo/pi/csi-tx.service /etc/systemd/system/ && sudo systemctl enable --now csi-tx
+```
+Receiver Pi (boards on USB): copy `csi_demo/live/forwarder.py` + `live/csi_frames.py` to `~`, set the Mac's IP in
+`csi_demo/pi/csi-forward.service`, install and enable it the same way.
 
-This project is released under the [Apache 2.0 license](LICENSE).
+### 4. Record
+```bash
+csi_demo/.venv/bin/python csi_demo/live/hub.py --camera 1      # http://localhost:8766/live
+```
+Check all 9 links show LIVE and the whole body is in frame, then Start sessions (e.g. s1, s2, s3, 10 min).
+
+### 5. Build dataset, train, evaluate
+```bash
+csi_demo/.venv/bin/python csi_demo/dataset/build_2d_cache.py --boards CSI-298988,CSI-wroom1,CSI-wroom2 \
+  --tx-ids 1,2,3 --session data/sessions/s1/csi:data/sessions/s1/labels \
+  --session data/sessions/s2/csi:data/sessions/s2/labels --session data/sessions/s3/csi:data/sessions/s3/labels \
+  --out data/cache_9link --split-by-session s3
+# GPU machine with this repo's MMCV/MMDet environment (see docs/get_started.md):
+PYTHONPATH=. python tools/train.py configs/wifi/petr_wifi_esp_multitx_2d.py --seed 0 --deterministic
+PYTHONPATH=. python csi_demo/train/eval_room1.py configs/wifi/petr_wifi_esp_multitx_2d.py \
+  work_dirs/petr_wifi_esp_multitx_2d/epoch_10.pth --cache data/cache_9link
+```
+Use your own board names in `--boards`. For a control, train once more on a copy of the cache with
+`train/csi.npy` rows permuted; the real model must beat it and the mean-pose baseline.
