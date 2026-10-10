@@ -282,7 +282,7 @@ def snapshot(rows=80):
                 cam={k: v for k, v in CAM.items() if k != 'jpeg'})
 
 
-WINDOW_CFG = {'boards': ['CSI-298988', 'CSI-wroom1', 'CSI-wroom2'], 'tx_ids': [1, 2, 3]}
+WINDOW_CFG = {'boards': ['CSI-298988', 'CSI-wroom1', 'CSI-wroom2'], 'tx_ids': [1, 2, 3], 'max_age': 0.7}
 WIFI = {'status': 'off'}
 
 
@@ -307,8 +307,9 @@ def infer_loop(args):
         t0 = time.time()
         t, w = live_window(args.mode)
         if w is None:
-            WIFI.update(status='waiting for CSI (every link needs 20 recent packets)', kpts=None)
-            smooth = None
+            WIFI['status'] = 'waiting for CSI (every link needs 20 recent packets)'
+            if time.time() - WIFI.get('last', 0) > 3:
+                WIFI['kpts'], smooth = None, None
         else:
             score, kp = rt.predict(w)
             smooth = kp if smooth is None else args.smooth * smooth + (1 - args.smooth) * kp
@@ -323,7 +324,8 @@ def live_window(mode):
         links = {k: (np.array([x[0] for x in q]), np.stack([x[5] for x in q]) if q else np.zeros((0, 104), np.int8))
                  for k, q in LINKS.items()}
     t = time.time()
-    return t, windowing.build_window(links, WINDOW_CFG['boards'], WINDOW_CFG['tx_ids'], t, mode)
+    return t, windowing.build_window(links, WINDOW_CFG['boards'], WINDOW_CFG['tx_ids'], t, mode,
+                                     WINDOW_CFG['max_age'])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -408,6 +410,9 @@ def main():
                     help='live CSI-only pose inference (clikart falls back to onnxruntime if it cannot start)')
     ap.add_argument('--license', default=str(ROOT / 'Default_Project_Wifi_Sensing.txt'), help='ClikaRT credential file')
     ap.add_argument('--infer-hz', type=float, default=4.0)
+    ap.add_argument('--max-age', type=float, default=0.7,
+                    help='oldest packet allowed in a live window, s (training used 0.7; raise to ~1.0 if a weak link '
+                         'delivers < 30 packets/s)')
     ap.add_argument('--no-serial', action='store_true', help='ignore boards on local USB (e.g. when replaying CSI over UDP)')
     ap.add_argument('--smooth', type=float, default=0.5, help='exponential smoothing of displayed poses (0 = none)')
     ap.add_argument('--boards', default=','.join(WINDOW_CFG['boards']),
@@ -416,6 +421,7 @@ def main():
                     help='transmitter Pi to show status for (repeatable); default: this setup\'s two Pis')
     args = ap.parse_args()
     WINDOW_CFG['boards'] = args.boards.split(',')
+    WINDOW_CFG['max_age'] = args.max_age
     if args.pi:
         PIS.clear()
         PIS.update(p.split('=', 1) for p in args.pi)
