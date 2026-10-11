@@ -16,7 +16,8 @@ input{background:#222;color:#ddd;border:1px solid #444;padding:4px;width:70px}
 <div class="top">
  <div class="card"><div class=lbl><b style="color:#f66">Wi-Fi pose &mdash; CSI only</b> <span id=wifistat></span></div>
   <canvas id=wp width=360 height=360></canvas></div>
- <div class="card"><div class=lbl>Camera + 2D pose (MediaPipe, reference only) <span id=camfps></span></div>
+ <div class="card"><div class=lbl>Camera + 2D pose (MediaPipe, reference only) <span id=camfps></span>
+  <button id=camtog style="background:#555;padding:2px 10px;margin-left:6px" onclick="camToggle()">camera</button></div>
   <div id="vid"><img src="/live/video" width=480 height=360><canvas id=ov width=480 height=360></canvas></div></div>
  <div class="card"><div class=lbl>3D pose (metres, hip-centred, rotating)</div><canvas id=p3 width=300 height=300></canvas></div>
  <div class="card" style="min-width:300px"><div class=lbl><b>Session</b></div>
@@ -48,7 +49,9 @@ function draw(){if(!S)return;grid();
 const E=[[0,1],[0,2],[0,3],[2,4],[4,8],[3,6],[6,10],[2,5],[3,7],[5,7],[5,9],[9,12],[7,11],[11,13]];let ang=0;
 async function ctl(a){const q=a==='start'?`?name=${encodeURIComponent(sname.value)}&minutes=${smin.value}`:'';
  const r=await (await fetch('/live/'+a+q,{method:'POST'})).json();document.getElementById('rec').dataset.msg=r.msg||'';}
-function pose(){if(!S)return;const c=S.cam||{};document.getElementById('camfps').textContent=c.error?c.error:`${c.fps} fps${c.kp2d?'':' - no person'}`;
+async function camToggle(){const on=!(S&&S.cam&&S.cam.enabled);await fetch('/live/camera?on='+(on?1:0),{method:'POST'});poll();}
+function pose(){if(!S)return;const c=S.cam||{};const tb=document.getElementById('camtog');tb.textContent=c.enabled?'turn camera OFF':'turn camera ON';tb.style.background=c.enabled?'#a33':'#2a7';
+ if(!c.enabled){document.getElementById('camfps').textContent='(off)';}document.getElementById('camfps').textContent=c.error?c.error:`${c.fps} fps${c.kp2d?'':' - no person'}`;
  const g=ov.getContext('2d');g.clearRect(0,0,480,360);if(c.kp2d){const k=c.kp2d;g.strokeStyle='#0f8';g.lineWidth=3;
   for(const[a,b]of E){g.beginPath();g.moveTo(k[a][0]*480,k[a][1]*360);g.lineTo(k[b][0]*480,k[b][1]*360);g.stroke();}
   g.fillStyle='#ff0';for(const p of k){g.beginPath();g.arc(p[0]*480,p[1]*360,4,0,7);g.fill();}}

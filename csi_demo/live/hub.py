@@ -69,7 +69,7 @@ CLOCKS = defaultdict(Clock)
 SOURCES = {}
 PI_STATUS = {}
 LOCK = threading.Lock()
-CAM = {'kp2d': None, 'kp3d': None, 'fps': 0.0, 'jpeg': b'', 'error': None}
+CAM = {'kp2d': None, 'kp3d': None, 'fps': 0.0, 'jpeg': b'', 'error': None, 'enabled': False}
 REC = {'active': False}
 REC_LOCK = threading.Lock()
 
@@ -161,15 +161,26 @@ def camera_loop(index):
     lm = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=str(MODEL_PATH)), running_mode=vision.RunningMode.VIDEO,
         num_poses=1))
-    cap = cv2.VideoCapture(index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    if not cap.isOpened():
-        CAM['error'] = f'cannot open camera {index}'
-        return
-    size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    cap, size = None, (0, 0)
     t_fps, n_fps = time.time(), 0
     while True:
+        if not CAM['enabled']:
+            if cap is not None:
+                cap.release()
+                cap = None
+                CAM.update(kp2d=None, kp3d=None, jpeg=b'', fps=0.0)
+            time.sleep(0.2)
+            continue
+        if cap is None:
+            cap = cv2.VideoCapture(index)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            if not cap.isOpened():
+                CAM.update(error=f'cannot open camera {index}', enabled=False)
+                cap = None
+                continue
+            CAM['error'] = None
+            size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         ok, frame = cap.read()
         t = time.time()
         if not ok:
@@ -331,7 +342,10 @@ def live_window(mode):
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        if self.path.startswith('/live/start'):
+        if self.path.startswith('/live/camera'):
+            CAM['enabled'] = q.get('on', ['1'])[0] in ('1', 'true', 'on')
+            REC['last'] = 'camera ' + ('on' if CAM['enabled'] else 'off')
+        elif self.path.startswith('/live/start'):
             REC['last'] = start_session(q.get('name', [''])[0], float(q.get('minutes', ['10'])[0]))
         elif self.path.startswith('/live/stop'):
             REC['last'] = stop_session()
@@ -415,7 +429,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, default=8766)
     ap.add_argument('--udp', type=int, default=5599)
-    ap.add_argument('--camera', type=int, default=1, help='webcam index; -1 = no camera (CSI + /live/window only)')
+    ap.add_argument('--camera', type=int, default=1,
+                    help='webcam index; -1 = start with the camera off (toggle it on the page; uses index 1)')
     ap.add_argument('--model', default=str(ROOT / 'data/ckpt/petr_v2.onnx'), help='exported ONNX pose model')
     ap.add_argument('--mode', default='v2', choices=sorted(windowing.MODES), help='window preprocessing the model expects')
     ap.add_argument('--backend', default='clikart', choices=['clikart', 'onnxruntime', 'off'],
@@ -440,8 +455,8 @@ def main():
     loops = [(udp_loop, (args.udp,)), (pi_loop, ()), (recorder_loop, ())]
     if not args.no_serial:
         loops.append((serial_watch, ()))
-    if args.camera >= 0:
-        loops.append((camera_loop, (args.camera,)))
+    CAM['enabled'] = args.camera >= 0
+    loops.append((camera_loop, (args.camera if args.camera >= 0 else 1,)))
     if args.backend != 'off':
         loops.append((infer_loop, (args,)))
     for target, a in loops:
