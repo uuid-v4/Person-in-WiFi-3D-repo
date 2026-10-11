@@ -39,6 +39,24 @@ Wi-Fi CSI only; per-clip mean joint error in brackets:
 |---|---|---|
 | ![](csi_demo/docs/v2_heldout_1.gif) | ![](csi_demo/docs/v2_heldout_2.gif) | ![](csi_demo/docs/v2_heldout_3.gif) |
 
+### Day 2: environment shift and fine-tuning
+
+The next day, with every device put back "in place", the v2 model failed: CSI fingerprints are very sensitive
+to centimetre-level antenna moves/turns, objects and people in the room, and the camera had also moved
+(labels are image coordinates). Per-link average subcarrier profiles correlated only -0.10 to 0.87 with the
+day before. We recorded 10 more minutes (s4) plus a 3-minute test session (s5) and fine-tuned v2 for 8 epochs
+on s1 + s2 + s4 (`configs/wifi/petr_wifi_esp_multitx_2d_v2ft.py`, 1.0 s windows as used live):
+
+| Model | s5, day 2 (held out): error / pck@0.1 | s3, day 1 (held out): error / pck@0.1 |
+|---|---|---|
+| **v2 fine-tuned, epoch 6 (live model)** | **12.91% / 0.504** | **10.04% / 0.654** |
+| v2 fine-tuned, epoch 8 | 13.15% / 0.495 | 10.08% / 0.655 |
+| v2 (day-1 data only) | 19.45% / 0.262 | 10.16% / 0.654 |
+| Always predict the average pose | 17.87% / 0.228 | 15.18% / 0.321 |
+
+The fine-tuned model works in both conditions. In practice: fix camera and antenna positions (tape marks,
+antenna orientation) and record a few minutes in any new layout or crowd condition before relying on it.
+
 The model tracks presence, position, height, overall posture and leg movement; it still tends to draw the
 arms down for distinctive arm poses (folded, spread, hands on head). Limits: one person, one room and
 layout, data recorded on one day; generalisation to other people or rooms is untested.
