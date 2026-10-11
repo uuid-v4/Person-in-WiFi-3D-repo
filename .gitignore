@@ -23,9 +23,11 @@ csi_demo/**/sdkconfig.old
 *.task
 
 # local agent state and scratch
+Default_Project_Wifi_Sensing.txt
 .omc/
 .omo/
 IMG_*.PNG
 beacon.png
 hello.md
 .DS_Store
+SPACEMAP-source/

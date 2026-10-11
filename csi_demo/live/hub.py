@@ -380,6 +380,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith('/live/pose'):
+            body = json.dumps({'status': WIFI.get('status'), 'kpts': WIFI.get('kpts'), 'score': WIFI.get('score'),
+                               'hz': WIFI.get('hz'), 'latency_ms': WIFI.get('latency_ms'),
+                               'backend': WIFI.get('backend'),
+                               'age': round(time.time() - WIFI['last'], 3) if WIFI.get('last') else None}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith('/live/state'):
             body, ctype = json.dumps(snapshot()).encode(), 'application/json'
         elif self.path.startswith('/live'):
