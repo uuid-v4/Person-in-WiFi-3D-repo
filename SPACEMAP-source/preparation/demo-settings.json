@@ -1,0 +1,209 @@
+{
+  "purpose": "가상 데이터로 진행하는 로컬 건물 시각화 시연",
+  "model": "assets/models/ANSEN.glb",
+  "map": {
+    "type": "real-2d-map",
+    "venueAddress": "서울특별시 서초구 양재동 14-14",
+    "modelRepresentsVenueInterior": false,
+    "note": "네이버·카카오 주소 검색으로 지번·도로명 일치를 확인했다. 실제 지도는 선택용 배경이며 ANSEN은 별도 시연용 모델이다.",
+    "provider": "OpenStreetMap tiles via Leaflet 1.9.4",
+    "roadAddress": "서울특별시 서초구 강남대로30길 7",
+    "center": {
+      "latitude": 37.4819223,
+      "longitude": 127.0375186
+    },
+    "zoom": 18,
+    "pointType": "address-reference-point, not surveyed building footprint",
+    "coordinateSource": {
+      "url": "https://m.map.kakao.com/actions/searchView?q=서울%20서초구%20강남대로30길%207",
+      "wcongnamul": [
+        508296,
+        1106246
+      ],
+      "method": "WCONGNAMUL / 2.5 -> EPSG:5181 -> EPSG:4326",
+      "methodReference": "https://devtalk.kakao.com/t/drawing-library/139708"
+    }
+  },
+  "platform": "Mac browser",
+  "trigger": "building-click-then-router-clicks",
+  "playback": "manual-router-steps",
+  "views": [
+    "map",
+    "oblique-3d",
+    "top-down"
+  ],
+  "initialInteriorVisibility": "faint-wall-outline-only",
+  "routerCount": 4,
+  "personCount": 4,
+  "peopleAreStationary": true,
+  "personRepresentation": "world-space-3d-skeleton",
+  "jointsPerPerson": 14,
+  "skeletonDefinition": "preparation/skeleton-14.json",
+  "layoutFile": "preparation/scene-layout.json",
+  "signalSource": "simulation",
+  "revealSource": "prebuilt-model",
+  "cctvEnabled": false,
+  "placementStatus": "네 구역의 모델 바닥에 시연용 좌표 배치",
+  "timingStatus": "단일 애니메이션 시각. 각 공개 구간 시작에서 클릭을 기다리며 대기 시간은 포함하지 않는다.",
+  "timelineSeconds": [
+    {
+      "start": 0,
+      "end": 2,
+      "action": "map-focus"
+    },
+    {
+      "start": 2,
+      "end": 5,
+      "action": "building-exterior-only"
+    },
+    {
+      "start": 5,
+      "end": 7,
+      "action": "top-view-interior-masked"
+    },
+    {
+      "start": 7,
+      "signalStart": 8.74,
+      "end": 10.34,
+      "action": "reveal",
+      "router": "R2",
+      "region": "B",
+      "person": "P2",
+      "entryPath": [
+        [
+          12.4,
+          -7.85
+        ],
+        [
+          12.4,
+          -7.05
+        ],
+        [
+          12.5,
+          -4.65
+        ],
+        [
+          12.65,
+          -3.5
+        ]
+      ]
+    },
+    {
+      "start": 10.34,
+      "signalStart": 12.96,
+      "end": 14.56,
+      "action": "reveal",
+      "router": "R3",
+      "region": "C",
+      "person": "P3",
+      "entryPath": [
+        [
+          12.65,
+          -3.5
+        ],
+        [
+          12.65,
+          -4.65
+        ],
+        [
+          9.05,
+          -4.65
+        ],
+        [
+          9.05,
+          -5.85
+        ],
+        [
+          9.65,
+          -5.85
+        ]
+      ]
+    },
+    {
+      "start": 14.56,
+      "signalStart": 20.16,
+      "end": 21.76,
+      "action": "reveal",
+      "router": "R1",
+      "region": "A",
+      "person": "P1",
+      "entryPath": [
+        [
+          9.65,
+          -5.85
+        ],
+        [
+          9.05,
+          -5.85
+        ],
+        [
+          9.05,
+          -4.65
+        ],
+        [
+          4.05,
+          -4.65
+        ],
+        [
+          1.5,
+          -4.65
+        ],
+        [
+          1.5,
+          -1.6
+        ],
+        [
+          3.1,
+          -1.45
+        ]
+      ]
+    },
+    {
+      "start": 21.76,
+      "signalStart": 24.53,
+      "end": 26.13,
+      "action": "reveal",
+      "router": "R4",
+      "region": "D",
+      "person": "P4",
+      "entryPath": [
+        [
+          3.1,
+          -1.45
+        ],
+        [
+          1.5,
+          -1.6
+        ],
+        [
+          1.5,
+          -5.8
+        ],
+        [
+          2.6,
+          -5.66
+        ]
+      ]
+    }
+  ],
+  "interiorMustStayHiddenBeforeReveal": true,
+  "controls": [
+    "next-router-click",
+    "pause-resume",
+    "replay",
+    "back-to-map",
+    "top-oblique-transition",
+    "mouse-orbit-zoom-pan"
+  ],
+  "confidencePercentages": false,
+  "preloadModelBeforePlayback": true,
+  "entryMarker": {
+    "representation": "circle-arrow",
+    "color": "#74d682",
+    "trail": "dashed",
+    "includedInPersonCount": false,
+    "source": "fixed-demonstration-path"
+  },
+  "controlStatus": "4단계: 도입부 이후 이동·공개·입력 대기·일시정지·완료 상태에서 카메라 조작 가능. 카메라는 시연 진행 시각과 분리한다.",
+  "futureSignalIntegration": "실제 센싱 장비와 관절 데이터 형식 확인 후 별도 구현. 현재 실시간 입력 또는 포즈 추론은 없음."
+}

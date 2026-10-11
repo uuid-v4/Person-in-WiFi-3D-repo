@@ -1,0 +1,36 @@
+{
+  "id": "demo-standing-14-v1",
+  "source": "synthetic",
+  "description": "사용자가 선택한 실제 공간 내 3D 스켈레톤. 시연용 관절 정의이며 측정 결과나 특정 AI 모델의 표준이 아니다.",
+  "units": "metres",
+  "axes": {"up": "y", "right": "x", "forward": "z"},
+  "origin": "floor between feet",
+  "display": "world-space-3d",
+  "billboard": false,
+  "joints": [
+    {"id": "head", "label": "머리", "position": [0, 1.68, 0]},
+    {"id": "neck", "label": "목", "position": [0, 1.47, 0]},
+    {"id": "left_shoulder", "label": "왼어깨", "position": [-0.21, 1.40, 0]},
+    {"id": "right_shoulder", "label": "오른어깨", "position": [0.21, 1.40, 0]},
+    {"id": "left_elbow", "label": "왼팔꿈치", "position": [-0.29, 1.13, 0.025]},
+    {"id": "right_elbow", "label": "오른팔꿈치", "position": [0.29, 1.13, 0.025]},
+    {"id": "left_wrist", "label": "왼손목", "position": [-0.33, 0.87, 0.055]},
+    {"id": "right_wrist", "label": "오른손목", "position": [0.33, 0.87, 0.055]},
+    {"id": "left_hip", "label": "왼고관절", "position": [-0.14, 0.91, 0]},
+    {"id": "right_hip", "label": "오른고관절", "position": [0.14, 0.91, 0]},
+    {"id": "left_knee", "label": "왼무릎", "position": [-0.16, 0.50, 0.015]},
+    {"id": "right_knee", "label": "오른무릎", "position": [0.16, 0.50, 0.015]},
+    {"id": "left_ankle", "label": "왼발목", "position": [-0.18, 0.09, 0.025]},
+    {"id": "right_ankle", "label": "오른발목", "position": [0.18, 0.09, 0.025]}
+  ],
+  "bones": [
+    ["head", "neck"],
+    ["neck", "left_shoulder"], ["neck", "right_shoulder"],
+    ["left_shoulder", "left_elbow"], ["right_shoulder", "right_elbow"],
+    ["left_elbow", "left_wrist"], ["right_elbow", "right_wrist"],
+    ["neck", "left_hip"], ["neck", "right_hip"],
+    ["left_hip", "right_hip"],
+    ["left_hip", "left_knee"], ["right_hip", "right_knee"],
+    ["left_knee", "left_ankle"], ["right_knee", "right_ankle"]
+  ]
+}

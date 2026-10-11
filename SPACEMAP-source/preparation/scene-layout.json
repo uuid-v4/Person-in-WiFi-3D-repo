@@ -1,0 +1,24 @@
+{
+  "source": "synthetic",
+  "units": "metres",
+  "coordinates": "Y-up model coordinates; GLB root already applies unit conversion",
+  "placementNote": "시연용 배치. 방 이름이나 실제 장비 위치를 뜻하지 않는다. 각 배치점의 모델 바닥 상면을 확인했다.",
+  "regions": [
+    {"id": "A", "name": "좌하단 구역", "x": [0, 7.6275], "z": [-4.9225, 0.025]},
+    {"id": "B", "name": "우하단 구역", "x": [7.6275, 15.255], "z": [-4.9225, 0.025]},
+    {"id": "C", "name": "우상단 구역", "x": [7.6275, 15.255], "z": [-9.87, -4.9225]},
+    {"id": "D", "name": "좌상단 구역", "x": [0, 7.6275], "z": [-9.87, -4.9225]}
+  ],
+  "routers": [
+    {"id": "R1", "region": "A", "position": [1.1, 0.25, -1.35]},
+    {"id": "R2", "region": "B", "position": [14.2, 0.25, -4.4]},
+    {"id": "R3", "region": "C", "position": [10.2, 0.25, -6.05]},
+    {"id": "R4", "region": "D", "position": [3.1, 0.20, -6.4]}
+  ],
+  "people": [
+    {"id": "P1", "region": "A", "position": [3.7, 0.25, -1.4], "yawDegrees": 0},
+    {"id": "P2", "region": "B", "position": [13.2, 0.25, -3.5], "yawDegrees": -20},
+    {"id": "P3", "region": "C", "position": [9.1, 0.25, -5.95], "yawDegrees": 20},
+    {"id": "P4", "region": "D", "position": [3.1, 0.20, -5.6], "yawDegrees": 0}
+  ]
+}

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SPACEMAP · 실내 공간·동작 시각화</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./vendor/leaflet/dist/leaflet.css">
+  <link rel="stylesheet" href="./demo.css?v=8">
+  <script type="importmap">
+    {"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}
+  </script>
+</head>
+<body data-phase="loading">
+  <header class="header">
+    <div class="heading">
+      <div class="heading-brand"><h1>SPACEMAP</h1><span class="simulation-badge"><span class="simulation-mark" aria-hidden="true"></span>가상 데이터 시연</span></div>
+      <p class="heading-subtitle">실내 공간·동작 시각화</p>
+      <p class="heading-description"><em>Wi-Fi 센싱 연동을 위한 2D·3D 프로토타입</em></p>
+    </div>
+    <ol class="steps" aria-label="화면 전환 순서">
+      <li data-step="map" aria-current="step"><span>01</span> 지도 선택</li>
+      <li data-step="exterior"><span>02</span> 외관</li>
+      <li data-step="top"><span>03</span> 탑뷰</li>
+      <li data-step="reveal"><span>04</span> 진입 · 공개</li>
+    </ol>
+    <div class="people-summary"><span class="eyebrow">CONFIRMED OCCUPANTS</span><strong id="people-count" role="status">확인된 가상 인원 0 / 4명</strong></div>
+  </header>
+  <main id="stage" aria-label="지도 및 건물 시연">
+    <section id="building-layer" class="layer" aria-label="가상 신호로 순차 공개하는 ANSEN 예시 모델" aria-hidden="true">
+      <div id="building-canvas"></div>
+    </section>
+    <section id="map-layer" class="layer" aria-label="시연 장소 선택 지도">
+      <div id="map"></div>
+      <div class="map-caption">주소 참조점 · 건물 경계선 아님</div>
+      <div class="map-attribution"><a href="https://leafletjs.com/">Leaflet</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors</div>
+    </section>
+    <aside class="place-card"><span class="eyebrow">장소</span><p id="address">주소를 불러오는 중…</p></aside>
+    <div id="observation-controls" class="control-group" hidden aria-label="진입 전 가상 관측">
+      <button id="observation-button" type="button">사전 관측</button>
+    </div>
+    <aside id="observation-panel" hidden aria-labelledby="detail-heading">
+      <div class="observation-heading"><strong id="detail-heading">가상 관측</strong><div class="observation-actions"><button id="confirmation-button" type="button" hidden>확인</button><button id="observation-close" type="button" aria-label="상세 정보 닫기">닫기</button></div></div>
+      <dl id="observation-content">
+        <div><dt>구역</dt><dd id="observation-region"></dd></div>
+        <div><dt>움직임</dt><dd id="observation-movement"></dd></div>
+        <div><dt>사람 추정</dt><dd id="observation-person"></dd></div>
+        <div><dt>움직임 정도</dt><dd id="observation-level"></dd></div>
+      </dl>
+      <div id="record-content" hidden>
+        <strong id="record-title"></strong>
+        <dl class="record-facts">
+          <div><dt>사전 관측</dt><dd id="record-observation"></dd></div>
+          <div><dt>확인 결과</dt><dd id="record-result"></dd></div>
+        </dl>
+        <label for="record-memo">메모 <span>(선택)</span></label>
+        <textarea id="record-memo" rows="2" maxlength="120" aria-describedby="record-note"></textarea>
+        <p id="record-note">현재 시연에만 유지 · 최대 120자</p>
+        <button id="record-back" type="button" hidden>결과로 돌아가기</button>
+      </div>
+      <div id="results-content" hidden>
+        <p id="results-count"></p>
+        <details id="results-details">
+          <summary>상세 보기</summary>
+          <div id="results-list"></div>
+        </details>
+      </div>
+    </aside>
+    <aside id="reveal-status" hidden aria-label="라우터 클릭 및 시연 구역 공개 상태">
+      <div class="route-heading"><span class="eyebrow">ENTRY ROUTE</span><span id="route-target">R2를 클릭하여 진입 시작</span></div>
+      <ul id="region-list"></ul>
+      <div class="route-legend"><span class="entrant-symbol" aria-hidden="true">↑</span><span>시연 사용자</span><span class="trail-symbol" aria-hidden="true"></span><span>지나온 동선</span><span class="occupant-symbol" aria-hidden="true">P</span><span>고정 가상 인원</span></div>
+    </aside>
+    <aside id="pose-panel" hidden aria-label="선택 인원 가상 관절 재생">
+      <span class="eyebrow" id="pose-eyebrow">SYNTHETIC POSE / 5 SEC</span>
+      <strong id="pose-status">확인된 인원을 클릭하면 실시간 자세 추정을 볼 수 있습니다 (허브 미연결 시 5초 가상 동작)</strong>
+      <p id="pose-note">로컬 가상 좌표 샘플 · 실제 Wi-Fi 수신 아님</p>
+      <div class="pose-actions"><button id="overview-button" type="button" disabled>전체 보기</button><button id="record-button" type="button" hidden>기록</button></div>
+    </aside>
+    <div id="playback-controls" hidden aria-label="시연 및 시점 조작">
+      <div class="control-group" role="group" aria-label="재생 조작">
+        <button id="pause-button" type="button" disabled aria-pressed="false">일시정지</button>
+        <button id="replay-button" type="button">다시 보기</button>
+        <button id="map-button" type="button">지도로 돌아가기</button>
+        <button id="results-button" type="button" hidden>결과 보기</button>
+      </div>
+      <div class="control-group" role="group" aria-label="시점 전환">
+        <button type="button" data-view="top" disabled aria-pressed="false">2D 탑뷰</button>
+        <button type="button" data-view="oblique" disabled aria-pressed="false">3D 보기</button>
+      </div>
+      <p id="camera-help">내부 화면에 도착하면 시점을 조작할 수 있습니다</p>
+    </div>
+    <div class="status-card" role="status" aria-live="polite" aria-atomic="true">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div><strong id="status-title">시연을 준비하고 있습니다</strong><p id="status-detail">설정과 모델을 불러오는 중…</p><p id="map-notice" hidden></p></div>
+    </div>
+    <div class="playback-progress" aria-hidden="true"><div id="progress-fill"></div></div>
+  </main>
+  <dialog id="reset-dialog" aria-labelledby="reset-title">
+    <form method="dialog">
+      <strong id="reset-title">현재 시연의 확인 기록과 메모가 초기화됩니다.</strong>
+      <div class="control-group"><button value="cancel" autofocus>취소</button><button value="reset">초기화하고 계속</button></div>
+    </form>
+  </dialog>
+  <noscript>시연을 보려면 브라우저의 JavaScript를 켜주세요.</noscript>
+  <script src="./vendor/leaflet/dist/leaflet.js"></script>
+  <script type="module">
+    import('./app.js?v=8').catch(error => {
+      document.body.dataset.phase = 'error';
+      document.querySelector('#status-title').textContent = '시연을 불러오지 못했습니다';
+      document.querySelector('#status-detail').textContent = `실행 파일 오류: ${error.message}`;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>
