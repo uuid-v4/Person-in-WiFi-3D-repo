@@ -274,7 +274,8 @@ python csi_demo/infer/export_onnx.py configs/wifi/petr_wifi_esp_multitx_2d_v2.py
 # 2. optional ClikaRT runtime: pip install clika_runtime-<ver>-cp312-...whl into csi_demo/.venv,
 #    credential file path via --license (default ./Default_Project_Wifi_Sensing.txt, git-ignored)
 # 3. run the hub: live CSI -> window every 0.25 s -> model -> skeleton on http://localhost:8766/live
-csi_demo/.venv/bin/python csi_demo/live/hub.py --camera -1 --backend clikart --model data/ckpt/petr_v2.onnx --mode v2
+csi_demo/.venv/bin/python csi_demo/live/hub.py --camera -1 --backend clikart --model data/ckpt/petr_v2.onnx --mode v2 \
+  --infer-hz 10 --smooth 0.3 --max-age 2.5   # 2.5 s lets one weak link (<20 pkt/s) lag instead of stalling every frame
 ```
 The red "Wi-Fi pose - CSI only" panel shows the top-1 pose (exponentially smoothed, `--smooth 0.5`), backend,
 latency and rate; the camera (if enabled with `--camera N`) is only drawn as a faint green reference.
